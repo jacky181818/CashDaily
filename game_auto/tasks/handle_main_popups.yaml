@@ -1,0 +1,105 @@
+# 任务：循环处理主界面弹窗
+name: 处理主界面弹窗
+description: |
+  循环检测并处理主界面三大弹窗，直到没有弹窗为止。
+
+  三大弹窗（检测标题文字作为判定条件）：
+  1. 离线收益弹窗 → 检测"额外领大量红包"（弹窗按钮文字）
+  2. 连续签到弹窗 → 检测"日签到"（弹窗标题文字）
+  3. 限时福利弹窗 → 检测"限时福利"（弹窗标题文字）
+
+  退出条件：三种弹窗标题都检测不到 → 退出循环。
+
+  注意："恭喜获得"、"开心收下"、"立即领取"是子任务弹窗，不在主界面弹窗检测中处理。
+  子任务弹窗由各自的子任务文件处理（offline_income.yaml / checkin_reward.yaml / limited_welfare.yaml）。
+
+  ⚠️ 轮播区域 (x:120, y:280, 宽~450, 高~220) 不是弹窗！
+  轮播内容：重置专属奖励、从美团币入口访问、幸运红包、惊喜礼包
+  所有OCR检测ROI必须避开此区域(y<530)，不能用轮播文字做弹窗特征。
+
+steps:
+  - name: 主界面弹窗处理循环
+    loop: 5                     # 最多处理5轮
+    loop_break_on_fail: false    # 单个子步骤失败不中断循环
+    loop_steps:
+      # ── Step 1: 检测并处理离线收益弹窗 ──
+      - name: 检测并处理离线收益弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "额外领大量红包"
+          roi: [0, 900, 720, 660]      # ⚠️ ROI 在 y>=900，避开轮播区域(y<530)
+          threshold: 0.5
+        then_steps:
+          - name: 执行离线收益弹窗任务
+            action: run_subtask
+            task: popups/offline_income.yaml
+
+      # ── Step 2: 检测并处理连续签到弹窗 ──
+      - name: 检测并处理连续签到弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "日签到"
+          roi: [200, 100, 400, 200]     # 弹窗标题区域
+          threshold: 0.5
+        then_steps:
+          - name: 执行连续签到任务
+            action: run_subtask
+            task: popups/checkin_reward.yaml
+
+      # ── Step 3: 检测并处理限时福利弹窗 ──
+      - name: 检测并处理限时福利弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "限时福利"
+          roi: [150, 100, 500, 180]     # 弹窗标题区域
+          threshold: 0.5
+        then_steps:
+          - name: 执行限时福利关闭任务
+            action: run_subtask
+            task: popups/limited_welfare.yaml
+
+      # ── Step 4: 退出检测 ──
+      # 检测是否还有任何弹窗标题
+      # 检测"额外领大量红包"（离线收益弹窗按钮文字）
+      - name: 退出检测-额外领大量红包
+        find:
+          type: ocr
+          text: "额外领大量红包"
+          roi: [0, 900, 720, 660]
+          threshold: 0.4
+        action: check
+        skip_if_not_found: true
+
+      # 检测"日签到"（连续签到弹窗标题）
+      - name: 退出检测-日签到
+        find:
+          type: ocr
+          text: "日签到"
+          roi: [200, 100, 400, 200]
+          threshold: 0.4
+        action: check
+        skip_if_not_found: true
+
+      # 检测"限时福利"（限时福利弹窗标题）
+      - name: 退出检测-限时福利
+        find:
+          type: ocr
+          text: "限时福利"
+          roi: [150, 100, 500, 180]
+          threshold: 0.4
+        action: check
+        skip_if_not_found: true
+
+      # 所有弹窗标题都找不到 → 无弹窗 → 退出循环
+      - name: 无弹窗退出确认
+        find:
+          type: ocr
+          text: "日签到"
+          roi: [200, 100, 400, 200]
+          threshold: 0.4
+        action: check
+        break_loop_if_not_found: true   # 找不到任何弹窗标题 = 无弹窗 = 退出循环
+        skip_if_not_found: false

@@ -1,0 +1,10 @@
+name: 领取离线收益
+steps:
+  - page: offline_income           # 1. 点击"额外领大量红包"
+  - name: 停留广告页等待奖励
+    action: wait
+    duration: 12                   # 等待10~15秒，取12秒中间值
+  - name: 按返回键回到主界面
+    action: back
+    wait_after: 2                  # 返回后等2秒让弹窗加载
+  - page: congrats_popup           # 4. 点击"开心收下"

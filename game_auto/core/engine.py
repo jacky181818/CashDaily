@@ -1,0 +1,646 @@
+"""Engine 模块：任务引擎，调度截图 → 识别 → 执行循环"""
+import yaml
+import os
+import time
+
+
+class TaskConfig:
+    """任务配置"""
+    def __init__(self, data: dict):
+        self.name = data["name"]
+        self.steps = data.get("steps", [])
+        self.pre_commands = data.get("pre_commands", [])  # 执行前的 adb shell 命令
+        self.precondition = data.get("precondition")  # 前置条件：满足才执行任务
+        self.sub_tasks = data.get("sub_tasks", [])  # 子任务列表（workflow模式）
+
+
+class Engine:
+    """任务引擎"""
+
+    def __init__(self, adb, finder, page_manager, logger, config: dict):
+        self.adb = adb
+        self.finder = finder
+        self.page_manager = page_manager
+        self.logger = logger
+        self.config = config
+        self.default_retry = config.get("default_retry", 3)
+        self.default_timeout = config.get("default_timeout", 10)
+        self.default_wait = config.get("default_wait_after", 1.5)
+        self.screenshot_cache = None
+
+    def load_task(self, task_path: str) -> TaskConfig:
+        """加载任务配置"""
+        with open(task_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        return TaskConfig(data)
+
+    def run_task(self, task: TaskConfig, tasks_dir: str = None) -> bool:
+        """执行完整任务（支持普通步骤和子任务串联两种模式）"""
+        self._current_tasks_dir = tasks_dir
+        self.logger.start_session(task.name)
+
+        # 执行前置命令
+        for cmd in task.pre_commands:
+            self.logger.info(f"执行前置命令: {cmd}")
+            self.adb.run(["shell", cmd], timeout=60)
+            time.sleep(5)  # 等待应用启动
+
+        # 检查前置条件
+        if task.precondition:
+            find_spec = task.precondition.get("find")
+            on_fail = task.precondition.get("on_fail", "skip")
+            self.logger.info(f"检查前置条件: {find_spec}")
+
+            screenshot_path = self._take_screenshot()
+            self.logger.save_screenshot(screenshot_path, "precondition")
+            result = self._execute_find_action(find_spec, "tap", {}, screenshot_path)
+
+            if result is None or not result.found:
+                self.logger.info(f"前置条件不满足 (on_fail={on_fail})")
+                if on_fail == "skip":
+                    self.logger.end_session(True, "前置条件不满足，跳过任务")
+                    return True
+                else:
+                    self.logger.end_session(False, "前置条件不满足")
+                    return False
+            else:
+                self.logger.info(f"前置条件满足: {result.detail}")
+
+        # 子任务串联模式（workflow）
+        if task.sub_tasks and tasks_dir:
+            return self._run_sub_tasks(task, tasks_dir)
+
+        # 普通步骤模式
+        for i, step in enumerate(task.steps):
+            step_desc = step.get("name", step.get("page", f"步骤{i+1}"))
+            self.logger.info(f"--- 步骤 {i+1}/{len(task.steps)}: {step_desc} ---")
+
+            # 检查是否为循环步骤
+            loop_count = step.get("loop")
+            if loop_count is not None:
+                loop_result = self._execute_loop(step)
+                # 循环失败不终止任务，继续后续步骤
+                if not loop_result:
+                    self.logger.info(f"循环步骤未完全完成，继续后续步骤")
+                continue
+
+            # 普通步骤
+            success = self._process_step(step)
+            if not success:
+                self.logger.end_session(False, f"步骤 {step_desc} 失败")
+                return False
+
+        self.logger.end_session(True, f"完成 {len(task.steps)} 个步骤")
+        return True
+
+    def _execute_loop(self, step: dict) -> bool:
+        """执行循环步骤"""
+        loop_count = step.get("loop", 1)
+        loop_steps = step.get("loop_steps", [])
+        loop_name = step.get("name", "循环")
+        loop_break_on_fail = step.get("loop_break_on_fail", True)
+
+        completed_iterations = 0
+        break_outer = False
+        for iteration in range(loop_count):
+            self.logger.info(f"=== {loop_name} 迭代 {iteration+1}/{loop_count} ===")
+            iteration_success = True
+
+            for j, sub_step in enumerate(loop_steps):
+                sub_desc = sub_step.get("name", sub_step.get("page", f"子步骤{j+1}"))
+                self.logger.info(f"  子步骤 {j+1}/{len(loop_steps)}: {sub_desc}")
+
+                success = self._process_step(sub_step)
+                if not success:
+                    # 检查是否为 break_loop_if_not_found（目标未找到时正常结束循环）
+                    if sub_step.get("break_loop_if_not_found", False):
+                        self.logger.info(f"  目标未找到，触发 break_loop_if_not_found，正常结束循环")
+                        iteration_success = False
+                        break_outer = True
+                        break  # 结束当前迭代
+
+                    # 检查是否为 skip_if_not_found（子步骤失败时跳过，继续外层循环）
+                    if sub_step.get("skip_if_not_found", False):
+                        self.logger.info(f"  子步骤 {sub_desc} 失败，但 skip_if_not_found=True，继续外层循环")
+                        continue
+
+                    self.logger.info(f"  子步骤 {sub_desc} 失败")
+                    iteration_success = False
+                    break
+
+                # 检查是否为 break_loop_if_found（目标找到时结束循环）
+                # 用于检测 toast 等信号，找到则表示循环完成
+                if sub_step.get("break_loop_if_found", False):
+                    self.logger.info(f"  目标已找到，触发 break_loop_if_found，正常结束循环")
+                    iteration_success = True
+                    break_outer = True
+                    break  # 结束当前迭代
+
+            if iteration_success:
+                completed_iterations += 1
+            elif loop_break_on_fail:
+                self.logger.info(f"循环 {loop_name} 在迭代 {iteration+1} 中断")
+                break
+            # 如果 loop_break_on_fail=False，继续下一次迭代
+
+            if break_outer:
+                self.logger.info(f"循环 {loop_name} 触发 break_loop_if_found，完全结束")
+                break
+
+        self.logger.info(f"循环 {loop_name} 结束，共完成 {completed_iterations}/{loop_count} 次迭代")
+        return completed_iterations > 0
+
+    def _process_step(self, step: dict) -> bool:
+        """处理单个步骤（普通步骤或循环子步骤）"""
+        page_name = step.get("page")
+
+        if page_name:
+            # 页面步骤：识别页面并执行动作
+            identified = self._wait_for_page(page_name)
+            if not identified:
+                fallback = step.get("fallback", {})
+                fb_action = fallback.get("action", "abort")
+                fb_retry = fallback.get("retry", 1)
+
+                if fb_action == "back":
+                    for _ in range(fb_retry):
+                        self.adb.press_back()
+                        time.sleep(1)
+                    identified = self._wait_for_page(page_name)
+                elif fb_action == "skip":
+                    self.logger.info(f"跳过页面步骤: {page_name}")
+                    return True
+                elif fb_action == "abort":
+                    self.logger.info(f"无法到达页面 {page_name}")
+                    return False
+
+                if not identified:
+                    self.logger.info(f"fallback 后仍无法到达 {page_name}")
+                    return False
+
+            page_config = self.page_manager.pages.get(page_name)
+            if page_config:
+                success = self._execute_actions(page_config)
+                if not success:
+                    return False
+            return True
+
+        else:
+            # 直接步骤：执行动作
+            action_type = step.get("action", "tap")
+            step_name = step.get("name", "未命名")
+            wait_before = step.get("wait_before", 0)
+            wait_after = step.get("wait_after", self.default_wait)
+            skip_if_not_found = step.get("skip_if_not_found", False)
+
+            # wait_before: 执行动作前先等待
+            if wait_before > 0:
+                self.logger.info(f"[等待] {wait_before} 秒 ({step_name})")
+                time.sleep(wait_before)
+
+            if action_type == "back":
+                self.adb.press_back()
+                self.logger.step("直接", step_name, "按下返回键 KEYCODE_BACK")
+                time.sleep(wait_after)
+                screenshot_after = self._take_screenshot()
+                self.logger.save_screenshot(screenshot_after, f"after_{step_name}")
+                return True
+
+            elif action_type == "wait":
+                duration = step.get("duration", wait_after)
+                self.logger.step("直接", step_name, f"等待 {duration} 秒")
+                time.sleep(duration)
+                return True
+
+            elif action_type == "home":
+                self.adb.press_home()
+                self.logger.step("直接", step_name, "按下 HOME 键")
+                time.sleep(wait_after)
+                screenshot_after = self._take_screenshot()
+                self.logger.save_screenshot(screenshot_after, f"after_{step_name}")
+                return True
+
+            elif action_type == "swipe":
+                # 直接滑动（无需先查找目标）
+                coords = step.get("swipe_coords")
+                if coords:
+                    self.adb.swipe(*coords)
+                    self.logger.step("直接", step_name, f"swipe {coords}")
+                time.sleep(wait_after)
+                screenshot_after = self._take_screenshot()
+                self.logger.save_screenshot(screenshot_after, f"after_{step_name}")
+                return True
+
+            elif action_type == "ensure_page":
+                # 确保当前在目标页面，如果不在则通过返回+重入导航
+                target_page = step.get("target_page")
+                max_back = step.get("max_back_attempts", 3)
+                entry_find = step.get("entry_find")
+                entry_wait = step.get("entry_wait", 2)
+                return self._ensure_page(target_page, max_back, entry_find, entry_wait)
+
+            elif action_type == "if_found":
+                # 条件分支：如果找到目标，执行 then_steps 子步骤
+                find_spec = step.get("find")
+                then_steps = step.get("then_steps", [])
+                if not find_spec or not then_steps:
+                    return True
+                screenshot_path = self._take_screenshot()
+                self.logger.save_screenshot(screenshot_path, f"if_found_{step_name}")
+                result = self._execute_find_action(find_spec, "check", step, screenshot_path)
+                if result and result.found:
+                    self.logger.step("直接", step_name, "条件满足，执行 then_steps")
+                    for t_step in then_steps:
+                        t_desc = t_step.get("name", "未命名")
+                        self.logger.info(f"  if_found 子步骤: {t_desc}")
+                        success = self._process_step(t_step)
+                        if not success:
+                            self.logger.info(f"  if_found 子步骤 {t_desc} 失败")
+                            return False
+                    return True
+                else:
+                    self.logger.step("直接", step_name, "条件未满足，跳过")
+                    return True
+
+            elif action_type == "run_subtask":
+                # 执行另一个子任务文件
+                sub_task_file = step.get("task")
+                if not sub_task_file:
+                    self.logger.info("run_subtask 缺少 task 参数")
+                    return False
+                tasks_dir = step.get("tasks_dir")
+                if tasks_dir is None:
+                    # 尝试从运行上下文推断
+                    tasks_dir = getattr(self, "_current_tasks_dir", None)
+                if tasks_dir is None:
+                    self.logger.info("run_subtask 缺少 tasks_dir")
+                    return False
+                sub_task_path = os.path.join(tasks_dir, sub_task_file)
+                if not os.path.exists(sub_task_path):
+                    self.logger.info(f"子任务文件不存在: {sub_task_path}")
+                    return False
+                sub_task = self.load_task(sub_task_path)
+                self.logger.info(f"run_subtask: 加载子任务 {sub_task.name}")
+                success = self.run_task(sub_task, tasks_dir)
+                self.logger.info(f"run_subtask: {sub_task.name} 执行{'成功' if success else '失败'}")
+                return success
+
+            elif action_type == "check":
+                # 只查找不操作：截图 → 查找目标 → 返回是否找到
+                # 用于检测 toast、弹窗等信号文字
+                find_spec = step.get("find")
+                if find_spec:
+                    screenshot_path = self._take_screenshot()
+                    self.logger.save_screenshot(screenshot_path, f"check_{step_name}")
+                    result = self._execute_find_action(find_spec, "check", step, screenshot_path)
+                    if result is None or not result.found:
+                        self.logger.step("直接", step_name, "检测未找到目标")
+                        return False
+                    self.logger.step("直接", step_name,
+                                     f"检测到目标 @ ({result.x}, {result.y}) 置信度 {result.confidence:.3f} [{result.detail}]")
+                    return True
+                return False
+
+            else:
+                # tap / swipe 等需要 find 的动作
+                find_spec = step.get("find")
+                if find_spec:
+                    screenshot_path = self._take_screenshot()
+                    self.logger.save_screenshot(screenshot_path, f"step_{step_name}")
+
+                    result = self._execute_find_action(find_spec, action_type, step, screenshot_path)
+                    if result is None or not result.found:
+                        if skip_if_not_found:
+                            self.logger.step("直接", step_name, "未找到目标，跳过")
+                            return True
+                        self.logger.step("直接", step_name, f"未找到目标")
+                        return False
+
+                    self.logger.step("直接", step_name,
+                                     f"找到目标 @ ({result.x}, {result.y}) 置信度 {result.confidence:.3f} [{result.detail}]")
+
+                    # 执行动作
+                    if action_type == "tap":
+                        # 支持点击偏移（如点击文字上方的图标）
+                        offset_x = step.get("offset_x", 0)
+                        offset_y = step.get("offset_y", 0)
+                        tap_x = result.x + offset_x
+                        tap_y = result.y + offset_y
+                        self.adb.tap(tap_x, tap_y)
+                        self.logger.info(f"tap ({tap_x}, {tap_y}) [偏移: ({offset_x}, {offset_y})]")
+                    elif action_type == "swipe":
+                        coords = step.get("swipe_coords")
+                        if coords:
+                            self.adb.swipe(*coords)
+
+                    time.sleep(wait_after)
+
+                    # 存截图验证
+                    screenshot_after = self._take_screenshot()
+                    self.logger.save_screenshot(screenshot_after, f"after_{step_name}")
+
+                return True
+
+    def _run_sub_tasks(self, task: TaskConfig, tasks_dir: str) -> bool:
+        """执行子任务串联（workflow模式）：依次加载并执行每个子任务"""
+        completed_tasks = 0
+        for i, sub_task_file in enumerate(task.sub_tasks):
+            self.logger.info(f"===== 子任务 {i+1}/{len(task.sub_tasks)}: {sub_task_file} =====")
+
+            sub_task_path = os.path.join(tasks_dir, sub_task_file)
+            if not os.path.exists(sub_task_path):
+                self.logger.info(f"子任务文件不存在: {sub_task_path}, 跳过")
+                continue
+
+            sub_task = self.load_task(sub_task_path)
+            self.logger.info(f"加载子任务: {sub_task.name}")
+
+            # 执行子任务（递归调用 run_task）
+            success = self.run_task(sub_task, tasks_dir)
+
+            if success:
+                completed_tasks += 1
+                self.logger.info(f"子任务 {sub_task.name} 执行成功")
+            else:
+                self.logger.info(f"子任务 {sub_task.name} 执行失败")
+                # 子任务失败时，根据配置决定是否继续
+                # 默认继续执行后续子任务（非关键任务失败不应阻断整个流程）
+                continue
+
+        self.logger.info(f"子任务串联完成: {completed_tasks}/{len(task.sub_tasks)} 个成功")
+        self.logger.end_session(completed_tasks > 0,
+                                f"完成 {completed_tasks}/{len(task.sub_tasks)} 个子任务")
+        return completed_tasks > 0
+
+    def _ensure_page(self, target_page: str, max_back: int = 3,
+                      entry_find: dict = None, entry_wait: float = 2) -> bool:
+        """确保当前在目标页面，如果不在则导航到目标页面
+
+        策略（优先尝试直接重入，避免不必要的返回键）：
+        1. 截图识别当前页面，如果已在目标页面则直接返回
+        2. 尝试通过 entry_find 入口按钮直接进入目标页面（避免按返回键关闭app）
+        3. 如果 entry_find 未找到入口按钮（可能被弹窗遮挡），按返回键清除遮挡后重试
+        4. 每次按返回键后都检查是否到达目标页面，并尝试 entry_find
+        """
+        # 1. 检查当前是否已在目标页面
+        screenshot_path = self._take_screenshot()
+        self.logger.save_screenshot(screenshot_path, "ensure_page_check")
+        current = self.page_manager.identify_current_page(self.finder, screenshot_path)
+
+        if current == target_page:
+            self.logger.info(f"ensure_page: 已在目标页面 {target_page}")
+            return True
+
+        self.logger.info(f"ensure_page: 当前页面={current}, 目标={target_page}")
+
+        # 2. 优先尝试 entry_find 直接重入（不按返回键）
+        if entry_find:
+            self.logger.info(f"ensure_page: 尝试直接通过入口按钮进入 {target_page}")
+            result = self._execute_find_action(entry_find, "tap", {}, screenshot_path)
+            if result and result.found:
+                self.logger.info(f"ensure_page: 找到入口按钮 @ ({result.x}, {result.y})，直接进入")
+                self.adb.tap(result.x, result.y)
+                time.sleep(entry_wait)
+
+                screenshot_path = self._take_screenshot()
+                self.logger.save_screenshot(screenshot_path, "ensure_page_direct_entry")
+                current = self.page_manager.identify_current_page(self.finder, screenshot_path)
+
+                if current == target_page:
+                    self.logger.info(f"ensure_page: 直接进入成功，到达目标页面 {target_page}")
+                    return True
+
+                self.logger.info(f"ensure_page: 直接进入后当前页面={current}, 继续尝试返回键")
+            else:
+                self.logger.info(f"ensure_page: 未找到入口按钮（可能被遮挡），尝试返回键清除遮挡")
+
+        # 3. 按返回键清除遮挡，每次返回后检查目标页面并尝试 entry_find
+        for i in range(max_back):
+            self.logger.info(f"ensure_page: 按返回键 (第{i+1}/{max_back}次)")
+            self.adb.press_back()
+            time.sleep(2)
+
+            screenshot_path = self._take_screenshot()
+            self.logger.save_screenshot(screenshot_path, f"ensure_page_back_{i}")
+            current = self.page_manager.identify_current_page(self.finder, screenshot_path)
+
+            if current == target_page:
+                self.logger.info(f"ensure_page: 返回键后到达目标页面 {target_page}")
+                return True
+
+            # 返回后尝试 entry_find
+            if entry_find:
+                self.logger.info(f"ensure_page: 返回后尝试入口按钮")
+                result = self._execute_find_action(entry_find, "tap", {}, screenshot_path)
+                if result and result.found:
+                    self.logger.info(f"ensure_page: 返回后找到入口按钮 @ ({result.x}, {result.y})")
+                    self.adb.tap(result.x, result.y)
+                    time.sleep(entry_wait)
+
+                    screenshot_path = self._take_screenshot()
+                    self.logger.save_screenshot(screenshot_path, f"ensure_page_back_entry_{i}")
+                    current = self.page_manager.identify_current_page(self.finder, screenshot_path)
+
+                    if current == target_page:
+                        self.logger.info(f"ensure_page: 返回+入口后到达目标页面 {target_page}")
+                        return True
+
+                    self.logger.info(f"ensure_page: 返回+入口后当前页面={current}")
+
+            self.logger.info(f"ensure_page: 返回键后当前页面={current}")
+
+        self.logger.info(f"ensure_page: 无法到达目标页面 {target_page}")
+        return False
+
+    def _take_screenshot(self) -> str:
+        """截图"""
+        path = self.adb.screenshot()
+        self.screenshot_cache = path
+        self.logger.info(f"截图: {path}")
+        return path
+
+    def _wait_for_page(self, page_name: str) -> bool:
+        """等待目标页面出现"""
+        retry = self.default_retry
+        timeout = self.default_timeout
+
+        for attempt in range(retry):
+            self.logger.info(f"等待页面 {page_name} (尝试 {attempt+1}/{retry})")
+            screenshot_path = self._take_screenshot()
+            self.logger.save_screenshot(screenshot_path, f"wait_{page_name}")
+
+            current = self.page_manager.identify_current_page(self.finder, screenshot_path)
+            if current == page_name:
+                self.logger.info(f"已识别页面: {page_name}")
+                return True
+
+            if current:
+                self.logger.info(f"当前在页面: {current} (期望: {page_name})")
+            else:
+                self.logger.info(f"无法识别当前页面 (期望: {page_name})")
+
+            time.sleep(timeout / retry)
+
+        return False
+
+    def _execute_actions(self, page_config) -> bool:
+        """执行页面上的所有动作"""
+        for action_def in page_config.actions:
+            name = action_def.get("name", "未命名")
+            action_type = action_def.get("action", "tap")
+            wait_after = action_def.get("wait_after", self.default_wait)
+            wait_before = action_def.get("wait_before", 0)
+            expect_page = action_def.get("expect_page")
+
+            # wait_before: 执行前先等待
+            if wait_before > 0:
+                self.logger.info(f"[等待] {wait_before} 秒 ({name})")
+                time.sleep(wait_before)
+
+            if action_type == "back":
+                self.adb.press_back()
+                self.logger.step(page_config.name, name, "按下返回键 KEYCODE_BACK")
+                time.sleep(wait_after)
+                screenshot_after = self._take_screenshot()
+                self.logger.save_screenshot(screenshot_after, f"after_{name}")
+
+            elif action_type == "wait":
+                duration = action_def.get("duration", wait_after)
+                self.logger.step(page_config.name, name, f"等待 {duration} 秒")
+
+            elif action_type == "home":
+                self.adb.press_home()
+                self.logger.step(page_config.name, name, "按下 HOME 键")
+                time.sleep(wait_after)
+                screenshot_after = self._take_screenshot()
+                self.logger.save_screenshot(screenshot_after, f"after_{name}")
+
+            else:
+                # tap / swipe / loop_click 等需要 find 的动作
+                find_spec = action_def.get("find")
+
+                # 先截图再查找
+                screenshot_path = self._take_screenshot()
+
+                result = self._execute_find_action(find_spec, action_type, action_def, screenshot_path)
+                if result is None or not result.found:
+                    skip_if_not_found = action_def.get("skip_if_not_found", False)
+                    if skip_if_not_found:
+                        self.logger.step(page_config.name, name, "未找到目标，跳过")
+                        continue
+                    self.logger.step(page_config.name, name, "未找到目标")
+                    return False
+
+                self.logger.step(page_config.name, name,
+                                 f"找到目标 @ ({result.x}, {result.y}) 置信度 {result.confidence:.3f} [{result.detail}]")
+
+                # 执行动作
+                if action_type == "tap":
+                    self.adb.tap(result.x, result.y)
+                    self.logger.info(f"tap ({result.x}, {result.y})")
+                elif action_type == "loop_click":
+                    # 循环点击：每次点击后重新截图查找，直到找不到目标
+                    max_iter = action_def.get("max_iterations", 50)
+                    not_found_retry = action_def.get("not_found_retry", 2)    # 找不到时重试次数
+                    not_found_wait = action_def.get("not_found_wait", 3)      # 重试前等待秒数
+                    iteration = 0
+
+                    while iteration < max_iter:
+                        if result is None or not result.found:
+                            # 重试机制：按钮可能被动画/弹窗遮挡，等一会再试
+                            retries = 0
+                            while retries < not_found_retry:
+                                self.logger.info(f"loop_click 未找到目标，重试 {retries+1}/{not_found_retry}，等待 {not_found_wait}秒")
+                                time.sleep(not_found_wait)
+                                screenshot_path = self._take_screenshot()
+                                self.logger.save_screenshot(screenshot_path, f"loop_retry_{name}_{iteration}")
+                                result = self._execute_find_action(find_spec, "tap", action_def, screenshot_path)
+                                if result and result.found:
+                                    break
+                                retries += 1
+                            if result is None or not result.found:
+                                self.logger.step(page_config.name, name,
+                                                 f"loop_click 结束，共点击 {iteration} 次（重试后仍未找到）")
+                                break
+
+                        iteration += 1
+                        self.adb.tap(result.x, result.y)
+                        self.logger.info(f"loop_click 第 {iteration} 次 tap ({result.x}, {result.y})")
+                        time.sleep(wait_after)
+
+                        # 重新截图并查找下一个
+                        screenshot_path = self._take_screenshot()
+                        self.logger.save_screenshot(screenshot_path, f"loop_{name}_{iteration}")
+                        result = self._execute_find_action(find_spec, "tap", action_def, screenshot_path)
+
+                    self.logger.step(page_config.name, name, f"loop_click 结束，共点击 {iteration} 次")
+                    # 跳过普通 tap 后续的等待和截图，循环内部已处理
+                    continue
+                elif action_type == "swipe":
+                    coords = action_def.get("swipe_coords")
+                    if coords:
+                        self.adb.swipe(*coords)
+
+                # 等待
+                time.sleep(wait_after)
+
+                # 存截图
+                screenshot_after = self._take_screenshot()
+                self.logger.save_screenshot(screenshot_after, f"after_{name}")
+
+            # 检查是否到达期望页面
+            if expect_page:
+                if screenshot_after is None:
+                    screenshot_after = self._take_screenshot()
+                current = self.page_manager.identify_current_page(self.finder, screenshot_after)
+                if current != expect_page:
+                    self.logger.info(f"期望页面 {expect_page}, 实际 {current}")
+
+        return True
+
+    def _execute_find_action(self, find_spec: dict, action_type: str,
+                              action_def: dict = None,
+                              screenshot_path: str = None) -> object:
+        """执行 find 规则并返回结果"""
+        if not screenshot_path:
+            screenshot_path = self._take_screenshot()
+
+        type_ = find_spec.get("type", "template")
+
+        if type_ == "template":
+            return self.finder.find_template(
+                screenshot_path,
+                template_name=find_spec["template"],
+                roi=tuple(find_spec.get("roi")) if find_spec.get("roi") else None,
+                threshold=find_spec.get("threshold"),
+                process=find_spec.get("process", "raw"),
+            )
+        elif type_ == "ocr":
+            return self.finder.find_ocr(
+                screenshot_path,
+                target_text=find_spec["text"],
+                roi=tuple(find_spec.get("roi")) if find_spec.get("roi") else None,
+                threshold=find_spec.get("threshold", self.finder.threshold),
+                exact_match=find_spec.get("exact_match", False),
+            )
+        elif type_ == "ocr_relative":
+            return self.finder.find_ocr_relative(
+                screenshot_path,
+                anchor_text=find_spec["anchor_text"],
+                target_text=find_spec["target_text"],
+                anchor_roi=tuple(find_spec.get("anchor_roi")) if find_spec.get("anchor_roi") else None,
+                y_range=find_spec.get("y_range", 60),
+                x_range=tuple(find_spec.get("x_range", [0, 720])),
+                threshold=find_spec.get("threshold", self.finder.threshold),
+                anchor_threshold=find_spec.get("anchor_threshold"),
+                exact_match=find_spec.get("exact_match", False),
+            )
+        elif type_ == "color":
+            return self.finder.find_color(
+                screenshot_path,
+                target_color=tuple(find_spec["color"]),
+                roi=tuple(find_spec.get("roi")) if find_spec.get("roi") else None,
+                tolerance=find_spec.get("tolerance", 30),
+                min_ratio=find_spec.get("min_ratio", 0.01),
+            )
+        return None

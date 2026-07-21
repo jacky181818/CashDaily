@@ -1,0 +1,8 @@
+name: 主界面三大任务
+# 从当前主界面直接执行：一键合成 → 捕捉精灵 → 领取每日任务
+# 注意：此任务跳过 launch_and_enter 与 handle_main_popups，请确保当前已在主界面且无弹窗
+
+sub_tasks:
+  - merge_all.yaml
+  - catch_spirit.yaml
+  - claim_daily_task.yaml

@@ -1,0 +1,13 @@
+# 任务：处理主界面连续签到弹窗
+name: 连续签到弹窗
+description: 点击"立即领取"按钮关闭弹窗
+
+steps:
+  - name: 点击立即领取
+    find:
+      type: ocr
+      text: "立即领取"
+      roi: [0, 900, 720, 660]  # 弹窗底部按钮区域
+      threshold: 0.5
+    action: tap
+    wait_after: 2

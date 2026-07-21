@@ -1,0 +1,17 @@
+name: congrats_popup
+description: 恭喜获得弹窗（浏览任务场景）。用户指定选择"歇会再看"，避免额外跳转。
+
+identify:
+  - type: ocr
+    text: "恭喜获得"
+    roi: [0, 300, 720, 600]
+    threshold: 0.5
+actions:
+  - name: 点击歇会再看按钮
+    find:
+      type: ocr
+      text: "歇会再看"
+      roi: [100, 1000, 520, 400]
+      threshold: 0.5
+    action: tap
+    wait_after: 2

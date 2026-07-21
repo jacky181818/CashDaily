@@ -1,0 +1,81 @@
+name: 一键合成
+description: 主界面循环点击"一键合成"x10 按钮，处理弹窗，固定点击一定次数后退出
+
+# 策略说明：
+# - "一键合成"按钮始终存在，OCR 每次都能找到
+# - "手动合成"toast 只在没有可合成精灵时才出现（但此时按钮仍能被 OCR 找到）
+# - 所以不能依赖 toast 或按钮消失作为退出条件
+# - 改为：固定点击 N 次（通常 10-20 次足够合成完），或检测到弹窗时处理弹窗
+#
+# 注意：点击"一键合成"后可能弹出三种弹窗：
+# 1. 广告弹窗（显示"下单可领3000红包"）→ 检测并关闭
+# 2. 天降福利弹窗（显示"天降福利"）→ 检测并关闭
+# 3. 评审得奖弹窗（显示"去评审得奖"）→ 检测并关闭
+# 三种弹窗都使用 close_btn_lucky_capture.png 模板匹配关闭按钮
+
+steps:
+  # 循环点击"一键合成"按钮，固定点击一定次数后退出
+  - name: 一键合成循环
+    loop: 20                          # 最多20轮（通常足够合成完）
+    loop_break_on_fail: false         # 不因失败中断循环
+    loop_steps:
+      # 1. 检测并处理广告弹窗（"下单可领3000红包"）
+      - name: 检测并关闭广告弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "下单可领3000红包"
+          threshold: 0.5
+        then_steps:
+          - name: 点击广告弹窗关闭按钮
+            find:
+              type: template
+              template: close_btn_lucky_capture.png
+              process: raw
+              threshold: 0.85
+            action: tap
+            wait_after: 2
+
+      # 2. 检测并处理天降福利弹窗（"天降福利"）
+      - name: 检测并关闭天降福利弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "天降福利"
+          threshold: 0.5
+        then_steps:
+          - name: 点击天降福利关闭按钮
+            find:
+              type: template
+              template: close_btn_lucky_capture.png
+              process: raw
+              threshold: 0.85
+            action: tap
+            wait_after: 2
+
+      # 3. 检测并处理评审得奖弹窗（"去评审得奖"）
+      - name: 检测并关闭评审得奖弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "去评审得奖"
+          threshold: 0.5
+        then_steps:
+          - name: 点击评审得奖关闭按钮
+            find:
+              type: template
+              template: close_btn_lucky_capture.png
+              process: raw
+              threshold: 0.85
+            action: tap
+            wait_after: 2
+
+      # 4. 点击"一键合成"按钮
+      - name: 点击一键合成
+        find:
+          type: ocr
+          text: "一键合成"
+          threshold: 0.8
+        action: tap
+        skip_if_not_found: true         # 找不到按钮时跳过（可能按钮被遮挡）
+        wait_after: 2.0               # 等待合成动画

@@ -1,0 +1,23 @@
+name: daily_task_popup
+description: 每日任务弹窗
+
+identify:
+  - type: ocr
+    text: "每日任务"
+    threshold: 0.4
+
+actions:
+  # 循环点击所有绿色"去领取"按钮，每次点击后重新截图查找，直到找不到为止
+  # 支持"去领取"按钮需要多次点击才消失的情况（有进度计数器的按钮）
+  - name: 领取所有去领取奖励
+    action: loop_click
+    find:
+      type: ocr
+      text: "去领取"
+      threshold: 0.5
+      exact_match: true
+      roi: [520, 600, 180, 800]    # 覆盖整个"去领取"按钮区域（y 从 600 到 1400）
+    max_iterations: 50             # 最多循环 50 次（某些按钮需多次点击才消失）
+    not_found_retry: 2             # 找不到时重试 2 次（应对动画/弹窗遮挡）
+    not_found_wait: 3              # 重试前等待 3 秒
+    wait_after: 2                  # 每次点击后等待 2 秒

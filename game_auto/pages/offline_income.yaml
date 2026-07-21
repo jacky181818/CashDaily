@@ -1,0 +1,18 @@
+name: offline_income
+identify:
+  - type: ocr
+    text: "离线收益"
+    # 弹窗标题一般在屏幕上半部分，限定搜索区域提高速度
+    roi: [0, 100, 720, 700]
+    threshold: 0.6
+actions:
+  - name: 点击额外领大量红包按钮
+    find:
+      type: ocr
+      text: "额外领大量红包"
+      roi: [60, 1000, 600, 400]
+      threshold: 0.6
+    action: tap
+    wait_after: 3
+    # 点击后通常会跳转到广告/短剧界面，这里暂时不强制 expect_page
+    expect_page: null

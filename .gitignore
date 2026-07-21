@@ -1,0 +1,31 @@
+# ===== Python 字节码 / 缓存 =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+venv/
+env/
+
+# ===== 日志（运行期生成） =====
+logs/
+**/logs/
+*.log
+
+# ===== 调试截图（运行期生成，体积大且非源码） =====
+*.png
+!game_auto/templates/
+!game_auto/templates/*.png
+captures/
+cropped/
+
+# ===== 项目运行数据（不纳入版本库） =====
+.workbuddy/
+
+# ===== Windows / 编辑器 / OS 临时文件 =====
+nul
+Thumbs.db
+.DS_Store
+*.swp
+*.bak
+.idea/
+.vscode/

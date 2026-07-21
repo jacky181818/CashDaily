@@ -1,0 +1,434 @@
+name: 领取每日任务奖励
+description: 进入游戏 → 主界面点击任务按钮 → 领取所有奖励 → 完成清单中的浏览任务
+
+# 可复用：检测到放置区满后，返回主界面执行一键合成，再重新打开任务弹窗
+check_and_merge: &check_and_merge
+  name: 检测放置区满并执行一键合成
+  action: if_found
+  find:
+    type: ocr
+    text: "放置区角色已达上限"
+    threshold: 0.5
+  then_steps:
+    - name: 关闭每日任务弹窗
+      action: tap
+      find:
+        type: template
+        template: close_btn_daily_task.png
+        process: raw
+        threshold: 0.85
+      skip_if_not_found: true
+      wait_after: 2
+    - name: 执行一键合成
+      action: run_subtask
+      task: merge_all.yaml
+    - name: 重新打开任务弹窗
+      action: tap
+      find:
+        type: ocr
+        text: "任务"
+        roi: [500, 1400, 180, 120]
+        threshold: 0.4
+      wait_after: 2
+
+steps:
+  # ===== 进入游戏（如果当前在登录界面） =====
+  - name: 进入游戏
+    action: tap
+    find:
+      type: ocr
+      text: "进入游戏"
+      roi: [0, 1100, 720, 460]
+      threshold: 0.5
+    skip_if_not_found: true
+    wait_after: 5
+
+  # ===== 第一阶段：进入弹窗并领取所有"去领取"奖励 =====
+  # ===== 第一阶段：进入弹窗并领取所有"去领取"奖励 =====
+
+  # 1. 主界面点击底部"任务"按钮
+  - name: 点击任务按钮
+    action: tap
+    find:
+      type: ocr
+      text: "任务"
+      roi: [500, 1400, 180, 120]  # 底部右侧"任务"按钮区域
+      threshold: 0.4
+    wait_after: 2                 # 等待"每日任务"弹窗
+
+  # 2. 循环领取所有"去领取"奖励
+  #    每次迭代：ensure_page确认在弹窗 → 点击去领取 → 关闭可能出现的弹窗
+  - name: 领取去领取奖励
+    loop: 50
+    loop_steps:
+      - name: 确保在弹窗中
+        action: ensure_page
+        target_page: daily_task_popup
+        max_back_attempts: 2
+        entry_find:
+          type: ocr
+          text: "任务"
+          roi: [500, 1400, 180, 120]
+          threshold: 0.4
+        entry_wait: 2
+      - name: 点击去领取
+        action: tap
+        break_loop_if_not_found: true
+        find:
+          type: ocr
+          text: "去领取"
+          threshold: 0.5
+          exact_match: true
+          roi: [520, 600, 180, 800]    # 覆盖弹窗中"去领取"按钮区域
+        wait_after: 3                   # 等待弹窗可能出现
+      - name: 处理去看看弹窗
+        page: browse_congrats_popup
+        fallback: {action: skip}
+      - name: 关闭开心收下弹窗
+        page: congrats_popup
+        fallback: {action: skip}
+
+  # 3. 关闭可能残留的弹窗
+  - page: congrats_popup
+    fallback: {action: skip}
+    wait_after: 2
+
+  # ===== 第二阶段：逐个完成浏览任务 =====
+  # 每个浏览任务的循环结构：
+  #   ensure_page → 查找anchor+去完成 → 等待浏览 → 返回 → 处理弹窗
+
+  # 4. 浏览优惠活动（多次任务，浏览 10 秒）
+  - name: 浏览优惠活动
+    loop: 20
+    loop_steps:
+      - name: 确保在弹窗中
+        action: ensure_page
+        target_page: daily_task_popup
+        max_back_attempts: 2
+        entry_find:
+          type: ocr
+          text: "任务"
+          roi: [500, 1400, 180, 120]
+          threshold: 0.4
+        entry_wait: 2
+      - name: 点击去完成
+        action: tap
+        break_loop_if_not_found: true
+        find:
+          type: ocr_relative
+          anchor_text: "浏览优惠活动"
+          target_text: "去完成"
+          anchor_roi: [0, 400, 720, 1000]
+          y_range: 60
+          x_range: [300, 720]
+          threshold: 0.5
+          exact_match: true
+        wait_after: 2
+      - <<: *check_and_merge
+      - name: 等待浏览
+        action: wait
+        duration: 12
+      - name: 返回
+        action: back
+        wait_after: 2
+      - name: 处理去看看弹窗
+        page: browse_congrats_popup
+        fallback: {action: skip}
+      - name: 关闭开心收下弹窗
+        page: congrats_popup
+        fallback: {action: skip}
+
+  # 5. 下单领奖励（单次，浏览 10 秒）
+  - name: 下单领奖励
+    loop: 1
+    loop_steps:
+      - name: 确保在弹窗中
+        action: ensure_page
+        target_page: daily_task_popup
+        max_back_attempts: 2
+        entry_find:
+          type: ocr
+          text: "任务"
+          roi: [500, 1400, 180, 120]
+          threshold: 0.4
+        entry_wait: 2
+      - name: 点击去完成
+        action: tap
+        break_loop_if_not_found: true
+        find:
+          type: ocr_relative
+          anchor_text: "下单领奖励"
+          target_text: "去完成"
+          anchor_roi: [0, 400, 720, 1000]
+          y_range: 60
+          x_range: [300, 720]
+          threshold: 0.5
+          exact_match: true
+        wait_after: 2
+      - <<: *check_and_merge
+      - name: 等待浏览
+        action: wait
+        duration: 12
+      - name: 返回
+        action: back
+        wait_after: 2
+      - name: 处理去看看弹窗
+        page: browse_congrats_popup
+        fallback: {action: skip}
+      - name: 关闭开心收下弹窗
+        page: congrats_popup
+        fallback: {action: skip}
+
+  # 6. 浏览页面领奖励（多次任务，浏览 10 秒）
+  - name: 浏览页面领奖励
+    loop: 20
+    loop_steps:
+      - name: 确保在弹窗中
+        action: ensure_page
+        target_page: daily_task_popup
+        max_back_attempts: 2
+        entry_find:
+          type: ocr
+          text: "任务"
+          roi: [500, 1400, 180, 120]
+          threshold: 0.4
+        entry_wait: 2
+      - name: 点击去完成
+        action: tap
+        break_loop_if_not_found: true
+        find:
+          type: ocr_relative
+          anchor_text: "浏览页面领奖励"
+          target_text: "去完成"
+          anchor_roi: [0, 400, 720, 1000]
+          y_range: 60
+          x_range: [300, 720]
+          threshold: 0.5
+          exact_match: true
+        wait_after: 2
+      - <<: *check_and_merge
+      - name: 等待浏览
+        action: wait
+        duration: 12
+      - name: 返回
+        action: back
+        wait_after: 2
+      - name: 处理去看看弹窗
+        page: browse_congrats_popup
+        fallback: {action: skip}
+      - name: 关闭开心收下弹窗
+        page: congrats_popup
+        fallback: {action: skip}
+
+  # 7. 点外卖好饭领红包（单次，浏览 10 秒）
+  - name: 点外卖好饭领红包
+    loop: 1
+    loop_steps:
+      - name: 确保在弹窗中
+        action: ensure_page
+        target_page: daily_task_popup
+        max_back_attempts: 2
+        entry_find:
+          type: ocr
+          text: "任务"
+          roi: [500, 1400, 180, 120]
+          threshold: 0.4
+        entry_wait: 2
+      - name: 点击去完成
+        action: tap
+        break_loop_if_not_found: true
+        find:
+          type: ocr_relative
+          anchor_text: "点外卖好饭领红包"
+          target_text: "去完成"
+          anchor_roi: [0, 400, 720, 1000]
+          y_range: 60
+          x_range: [300, 720]
+          threshold: 0.5
+          exact_match: true
+        wait_after: 2
+      - <<: *check_and_merge
+      - name: 等待浏览
+        action: wait
+        duration: 12
+      - name: 返回
+        action: back
+        wait_after: 2
+      - name: 处理去看看弹窗
+        page: browse_congrats_popup
+        fallback: {action: skip}
+      - name: 关闭开心收下弹窗
+        page: congrats_popup
+        fallback: {action: skip}
+
+  # 8. 外卖浏览下单（单次，浏览 10 秒）
+  - name: 外卖浏览下单
+    loop: 1
+    loop_steps:
+      - name: 确保在弹窗中
+        action: ensure_page
+        target_page: daily_task_popup
+        max_back_attempts: 2
+        entry_find:
+          type: ocr
+          text: "任务"
+          roi: [500, 1400, 180, 120]
+          threshold: 0.4
+        entry_wait: 2
+      - name: 点击去完成
+        action: tap
+        break_loop_if_not_found: true
+        find:
+          type: ocr_relative
+          anchor_text: "外卖浏览下单"
+          target_text: "去完成"
+          anchor_roi: [0, 400, 720, 1000]
+          y_range: 60
+          x_range: [300, 720]
+          threshold: 0.5
+          exact_match: true
+        wait_after: 2
+      - <<: *check_and_merge
+      - name: 等待浏览
+        action: wait
+        duration: 12
+      - name: 返回
+        action: back
+        wait_after: 2
+      - name: 处理去看看弹窗
+        page: browse_congrats_popup
+        fallback: {action: skip}
+      - name: 关闭开心收下弹窗
+        page: congrats_popup
+        fallback: {action: skip}
+
+  # 9. 浏览30秒领精灵球（单次，浏览 30 秒）
+  - name: 浏览30秒领精灵球
+    loop: 1
+    loop_steps:
+      - name: 确保在弹窗中
+        action: ensure_page
+        target_page: daily_task_popup
+        max_back_attempts: 2
+        entry_find:
+          type: ocr
+          text: "任务"
+          roi: [500, 1400, 180, 120]
+          threshold: 0.4
+        entry_wait: 2
+      - name: 点击去完成
+        action: tap
+        break_loop_if_not_found: true
+        find:
+          type: ocr_relative
+          anchor_text: "浏览30秒领精灵球"
+          target_text: "去完成"
+          anchor_roi: [0, 400, 720, 1000]
+          y_range: 60
+          x_range: [300, 720]
+          threshold: 0.5
+          exact_match: true
+        wait_after: 2
+      - <<: *check_and_merge
+      - name: 等待浏览
+        action: wait
+        duration: 32
+      - name: 返回
+        action: back
+        wait_after: 2
+      - name: 处理去看看弹窗
+        page: browse_congrats_popup
+        fallback: {action: skip}
+      - name: 关闭开心收下弹窗
+        page: congrats_popup
+        fallback: {action: skip}
+
+  # 10. 完成浏览领奖励（多次任务，浏览 10 秒）
+  - name: 完成浏览领奖励
+    loop: 20
+    loop_steps:
+      - name: 确保在弹窗中
+        action: ensure_page
+        target_page: daily_task_popup
+        max_back_attempts: 2
+        entry_find:
+          type: ocr
+          text: "任务"
+          roi: [500, 1400, 180, 120]
+          threshold: 0.4
+        entry_wait: 2
+      - name: 点击去完成
+        action: tap
+        break_loop_if_not_found: true
+        find:
+          type: ocr_relative
+          anchor_text: "完成浏览领奖励"
+          target_text: "去完成"
+          anchor_roi: [0, 400, 720, 1000]
+          y_range: 60
+          x_range: [300, 720]
+          threshold: 0.5
+          exact_match: true
+        wait_after: 2
+      - <<: *check_and_merge
+      - name: 等待浏览
+        action: wait
+        duration: 12
+      - name: 返回
+        action: back
+        wait_after: 2
+      - name: 处理去看看弹窗
+        page: browse_congrats_popup
+        fallback: {action: skip}
+      - name: 关闭开心收下弹窗
+        page: congrats_popup
+        fallback: {action: skip}
+
+  # 11. 浏览好物5秒领奖励（多次任务，浏览 5 秒）
+  - name: 浏览好物5秒领奖励
+    loop: 20
+    loop_steps:
+      - name: 确保在弹窗中
+        action: ensure_page
+        target_page: daily_task_popup
+        max_back_attempts: 2
+        entry_find:
+          type: ocr
+          text: "任务"
+          roi: [500, 1400, 180, 120]
+          threshold: 0.4
+        entry_wait: 2
+      - name: 点击去完成
+        action: tap
+        break_loop_if_not_found: true
+        find:
+          type: ocr_relative
+          anchor_text: "浏览好物5秒领奖励"
+          target_text: "去完成"
+          anchor_roi: [0, 400, 720, 1000]
+          y_range: 60
+          x_range: [300, 720]
+          threshold: 0.5
+          exact_match: true
+        wait_after: 2
+      - <<: *check_and_merge
+      - name: 等待浏览
+        action: wait
+        duration: 7
+      - name: 返回
+        action: back
+        wait_after: 2
+      - name: 处理去看看弹窗
+        page: browse_congrats_popup
+        fallback: {action: skip}
+      - name: 关闭开心收下弹窗
+        page: congrats_popup
+        fallback: {action: skip}
+
+  # 12. 最后关闭可能残留的弹窗，返回主界面
+  - page: congrats_popup
+    fallback: {action: skip}
+    wait_after: 2
+  - name: 返回主界面
+    action: back
+    wait_after: 2

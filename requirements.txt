@@ -1,0 +1,9 @@
+# 核心依赖（必装）
+opencv-python>=4.7
+numpy>=1.23
+Pillow>=9.5
+pyyaml>=6.0
+
+# 可选：OCR 文字识别（config.yaml 中 ocr_enabled 控制）
+# 不安装时仅 template / color 匹配可用，ocr / ocr_relative 类型查找会被跳过
+# paddleocr>=2.6

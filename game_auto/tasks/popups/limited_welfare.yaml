@@ -1,0 +1,13 @@
+# 任务：处理主界面限时福利弹窗
+name: 限时福利弹窗
+description: 点击右上角 X 图标关闭弹窗
+
+steps:
+  - name: 点击限时福利关闭按钮
+    find:
+      type: template
+      template: close_btn_limited_welfare.png
+      process: raw
+      threshold: 0.85
+    action: tap
+    wait_after: 2

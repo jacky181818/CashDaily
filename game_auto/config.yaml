@@ -1,0 +1,17 @@
+# 全局配置
+adb_path: "D:\\AppBundles\\Scrcpy\\adb.exe"
+device: null  # null 表示自动选择，或填写设备 ID 如 "NABDU20728004929"
+
+# 模板和页面目录（相对于 game_auto 目录）
+templates_dir: "templates"
+pages_dir: "pages"
+tasks_dir: "tasks"
+logs_dir: "logs"
+
+# 默认参数
+default_retry: 3          # 重试次数
+default_timeout: 10       # 超时秒数
+default_wait_after: 1.5   # 动作后等待秒数
+
+# OCR 开关（需要安装 paddleocr）
+ocr_enabled: true

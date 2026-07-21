@@ -1,0 +1,75 @@
+name: 捕捉精灵
+description: 主界面点击捕捉 → 幸运捕捉弹窗 → 去捕捉 → 确认 → 恭喜获得弹窗(免费升级) → 浏览10-15秒 → 按返回键回到主界面
+
+# 任务前置条件：只有"捕捉"按钮上方出现"大量精灵"时才执行
+precondition:
+  find:
+    type: ocr
+    text: "大量精灵"
+    roi: [120, 1320, 200, 100]  # 大量精灵约 @ (158,1342)-(237,1365)
+    threshold: 0.4
+  on_fail: skip                 # 条件不满足时跳过任务（非错误）
+
+steps:
+  # 1. 主界面点击"捕捉"按钮 → 打开"幸运捕捉"弹窗
+  - name: 点击捕捉按钮
+    find:
+      type: ocr
+      text: "捕捉"
+      roi: [80, 1380, 240, 120]   # 底部左侧紫色按钮区域
+      threshold: 0.4
+    action: tap
+    wait_after: 2                 # 等待"幸运捕捉"弹窗
+
+  # 2. "幸运捕捉"弹窗 - 点击"去捕捉"按钮（橙色）
+  - name: 点击去捕捉按钮
+    find:
+      type: ocr
+      text: "去捕捉"
+      exact_match: true           # 必须完全等于"去捕捉"，避免匹配到其他文字
+      threshold: 0.5
+    action: tap
+    wait_after: 2                 # 等待"确认"弹窗出现
+
+  # 3. "确认"弹窗 - 点击"确认"按钮
+  - name: 点击确认按钮
+    find:
+      type: ocr
+      text: "确认"
+      exact_match: true
+      threshold: 0.5
+    action: tap
+    wait_after: 3                 # 等待"恭喜获得"弹窗出现
+
+  # 4. "恭喜获得"弹窗 - 点击"免费升级"按钮 → 进入浏览页面
+  - name: 点击免费升级按钮
+    find:
+      type: ocr
+      text: "免费升级"
+      exact_match: true
+      threshold: 0.5
+    action: tap
+    wait_after: 4                 # 等待浏览页面加载
+
+  # 5. 浏览10-15秒（上滑+下滑模拟浏览行为）
+  - name: 上滑浏览
+    action: swipe
+    swipe_coords: [360, 1000, 360, 400, 300]
+    wait_after: 0.5
+  - name: 下滑浏览
+    action: swipe
+    swipe_coords: [360, 400, 360, 1000, 300]
+    wait_after: 0.5
+  - name: 上滑浏览
+    action: swipe
+    swipe_coords: [360, 1000, 360, 400, 300]
+    wait_after: 0.5
+  - name: 下滑浏览
+    action: swipe
+    swipe_coords: [360, 400, 360, 1000, 300]
+    wait_after: 12                # 等待 12 秒浏览时间
+
+  # 6. 按返回键返回主界面
+  - name: 按返回键返回主界面
+    action: back
+    wait_after: 2

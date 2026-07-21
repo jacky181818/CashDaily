@@ -1,0 +1,23 @@
+# 任务：启动美团程序并进入天天现金小程序
+name: 启动并进入天天现金
+pre_commands:
+  # 启动美团小游戏容器（不等待 Activity ready，避免被动画/弹窗阻塞）
+  - "am start -n com.sankuai.meituan/com.meituan.android.mgc.container.MGCGameActivity"
+
+steps:
+  - name: 等待界面稳定
+    action: wait
+    duration: 5
+
+  # 如果当前不在游戏内（如仍在美团首页），点击"天天现金"入口
+  # 注意：点击"天天现金"文字上方的黄色"¥100"图标，避免点到右边的"机票火车票"
+  - name: 点击天天现金
+    find:
+      type: ocr
+      text: "天天现金"
+    action: tap
+    offset_y: -80                 # 向上偏移80像素，点击文字上方的图标
+    skip_if_not_found: true
+    wait_after: 3
+
+  # 注：主界面弹窗（离线收益、连续签到、限时福利等）由 handle_main_popups.yaml 统一处理

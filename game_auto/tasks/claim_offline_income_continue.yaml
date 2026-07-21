@@ -1,0 +1,9 @@
+name: 领取离线收益（从广告页续接）
+steps:
+  - name: 停留广告页等待奖励
+    action: wait
+    duration: 12
+  - name: 按返回键回到主界面
+    action: back
+    wait_after: 2
+  - page: congrats_popup
