@@ -1,4 +1,5 @@
 """ADB 操作模块：截图、tap、swipe、启动应用"""
+import re
 import subprocess
 import os
 import time
@@ -20,7 +21,10 @@ class ADB:
 
     def run(self, args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
         cmd = self._cmd(args)
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        # 用 text=True + errors="replace" 容错解码，避免 dumpsys 等输出中的非法
+        # 多字节序列在中文 Windows(GBK)下触发 UnicodeDecodeError 导致 stdout 为 None
+        return subprocess.run(cmd, capture_output=True, text=True,
+                              errors="replace", timeout=timeout)
 
     def get_state(self) -> str:
         r = self.run(["get-state"])
@@ -98,3 +102,73 @@ class ADB:
                 parts = line.split(":")[-1].strip().split("x")
                 return int(parts[0]), int(parts[1])
         return 720, 1560  # 默认值
+
+    def get_current_package(self) -> str:
+        """返回当前前台应用的包名（解析 dumpsys window 的 mCurrentFocus）
+
+        示例输出: mCurrentFocus=Window{5fa1443 u0 com.sankuai.meituan/...}
+        返回: com.sankuai.meituan
+        """
+        # dumpsys window 输出很大且可能含非法字节；errors="replace" 已容错，
+        # 这里再用 or "" 防御极端情况下 stdout 为 None
+        r = self.run(["shell", "dumpsys", "window"])
+        out = r.stdout or ""
+        for line in out.splitlines():
+            if "mCurrentFocus" in line:
+                m = re.search(r"(\S+)/", line.strip())
+                if m:
+                    return m.group(1)
+        return ""
+
+    def get_current_activity(self) -> tuple[str, str]:
+        """返回当前前台应用的 (包名, Activity 全类名)，解析 dumpsys window 的 mCurrentFocus
+
+        示例输出: mCurrentFocus=Window{9afc764 u0 com.sankuai.meituan/com.meituan.android.mgc.container.MGCGameActivity}
+        返回: ("com.sankuai.meituan", "com.meituan.android.mgc.container.MGCGameActivity")
+
+        注意：天天现金主游戏为 MGCGameActivity（无后缀）；美团其他小游戏为
+        MGCGameActivity1 / MGCGameActivity2 等（带数字后缀），window id 会变，
+        但 Activity 类名稳定，可用于区分“当前是否在天天现金主游戏内”。
+        """
+        r = self.run(["shell", "dumpsys", "window"])
+        out = r.stdout or ""
+        for line in out.splitlines():
+            if "mCurrentFocus" in line:
+                m = re.search(r"(\S+)/(\S+)", line.strip())
+                if m:
+                    pkg = m.group(1)
+                    act = m.group(2).rstrip("}")
+                    return (pkg, act)
+        return ("", "")
+
+    def bring_to_front(self, package: str, game_activity: str = None, retries: int = 3):
+        """把美团游戏页（MGCGameActivity，每日任务弹窗所在）带回前台。
+
+        注意：monkey -p <pkg> -c LAUNCHER 会把该 App 的 LAUNCHER 主页（MainActivity）
+        带到前台，而非游戏页，所以这里**优先**用 am start 直接启动游戏 Activity：
+          - 若游戏 Activity 为 singleTask/singleInstance（美团游戏通常如此），则保留
+            现有任务栈与每日任务弹窗状态，仅把它置顶；
+          - 若实例已被回收，则重启游戏，由后续 ensure_page 重新打开每日任务弹窗。
+        monkey 仅作为兜底手段（极少走到）。
+
+        容错：force-stop 后第三方 App 可能重启抢占焦点、或 dumpsys 在 force-stop 瞬间
+        返回旧焦点，因此这里**多次重试**并核验当前包名，确保真的回到美团再返回成功。
+        """
+        for attempt in range(retries):
+            # 方式一：优先 am start 直接启动游戏 Activity（带 REORDER_TO_FRONT 标志，
+            # 实例已存在时不重建，保留弹窗状态）
+            if game_activity:
+                self.run(["shell", "am", "start",
+                          "-n", f"{package}/{game_activity}",
+                          "-f", "0x20000000"], timeout=30)
+            time.sleep(2.5)
+            pkg, _ = self.get_current_activity()
+            if pkg == package:
+                return True
+            # 方式二：兜底 monkey 启动 launcher activity
+            self.run(["shell", "monkey", "-p", package,
+                      "-c", "android.intent.category.LAUNCHER", "1"], timeout=30)
+            time.sleep(2.5)
+            if self.get_current_package() == package:
+                return True
+        return self.get_current_package() == package

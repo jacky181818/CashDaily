@@ -1,5 +1,5 @@
 name: 捕捉精灵
-description: 主界面点击捕捉 → 幸运捕捉弹窗 → 去捕捉 → 确认 → 恭喜获得弹窗(免费升级) → 浏览10-15秒 → 按返回键回到主界面
+description: 主界面点击捕捉 → 幸运捕捉弹窗 → 去捕捉 → 确认 → （可选）恭喜获得弹窗(免费升级) → 浏览10-15秒 → 按返回键回到主界面
 
 # 任务前置条件：只有"捕捉"按钮上方出现"大量精灵"时才执行
 precondition:
@@ -29,7 +29,7 @@ steps:
       exact_match: true           # 必须完全等于"去捕捉"，避免匹配到其他文字
       threshold: 0.5
     action: tap
-    wait_after: 2                 # 等待"确认"弹窗出现
+    wait_after: 20                 # 等待"确认"弹窗出现
 
   # 3. "确认"弹窗 - 点击"确认"按钮
   - name: 点击确认按钮
@@ -39,37 +39,45 @@ steps:
       exact_match: true
       threshold: 0.5
     action: tap
-    wait_after: 3                 # 等待"恭喜获得"弹窗出现
+    wait_after: 3                 # 等待"恭喜获得"弹窗出现，或直接回主界面
 
-  # 4. "恭喜获得"弹窗 - 点击"免费升级"按钮 → 进入浏览页面
-  - name: 点击免费升级按钮
+  # 4~6. "恭喜获得"弹窗（可选）：点击"免费升级" → 浏览10-15秒 → 按返回键
+  # 点击"确认"后可能直接回主界面，不一定弹出"恭喜获得"弹窗，
+  # 故整段设为可选：未检测到"免费升级"按钮则跳过，任务直接结束。
+  - name: 处理恭喜获得弹窗（可选）
+    action: if_found
     find:
       type: ocr
       text: "免费升级"
       exact_match: true
       threshold: 0.5
-    action: tap
-    wait_after: 4                 # 等待浏览页面加载
+    then_steps:
+      - name: 点击免费升级按钮
+        find:
+          type: ocr
+          text: "免费升级"
+          exact_match: true
+          threshold: 0.5
+        action: tap
+        wait_after: 4             # 等待浏览页面加载
 
-  # 5. 浏览10-15秒（上滑+下滑模拟浏览行为）
-  - name: 上滑浏览
-    action: swipe
-    swipe_coords: [360, 1000, 360, 400, 300]
-    wait_after: 0.5
-  - name: 下滑浏览
-    action: swipe
-    swipe_coords: [360, 400, 360, 1000, 300]
-    wait_after: 0.5
-  - name: 上滑浏览
-    action: swipe
-    swipe_coords: [360, 1000, 360, 400, 300]
-    wait_after: 0.5
-  - name: 下滑浏览
-    action: swipe
-    swipe_coords: [360, 400, 360, 1000, 300]
-    wait_after: 12                # 等待 12 秒浏览时间
+      - name: 上滑浏览
+        action: swipe
+        swipe_coords: [360, 1000, 360, 400, 300]
+        wait_after: 0.5
+      - name: 下滑浏览
+        action: swipe
+        swipe_coords: [360, 400, 360, 1000, 300]
+        wait_after: 0.5
+      - name: 上滑浏览
+        action: swipe
+        swipe_coords: [360, 1000, 360, 400, 300]
+        wait_after: 0.5
+      - name: 下滑浏览
+        action: swipe
+        swipe_coords: [360, 400, 360, 1000, 300]
+        wait_after: 12            # 等待 12 秒浏览时间
 
-  # 6. 按返回键返回主界面
-  - name: 按返回键返回主界面
-    action: back
-    wait_after: 2
+      - name: 按返回键返回主界面
+        action: back
+        wait_after: 2

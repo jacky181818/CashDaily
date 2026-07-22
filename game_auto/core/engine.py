@@ -2,6 +2,7 @@
 import yaml
 import os
 import time
+from .finder import FinderResult
 
 
 class TaskConfig:
@@ -206,10 +207,77 @@ class Engine:
                 self.logger.save_screenshot(screenshot_after, f"after_{step_name}")
                 return True
 
+            elif action_type == "return_to_task":
+                # 从浏览/任务页面返回每日任务弹窗：统一走“返回游戏主界面”逻辑。
+                # _return_to_game_main 会按 Activity 分类处理
+                # 第三方App(force-stop) / 其他小游戏(圆圈关闭) / 美团首页(点天天现金) /
+                # 美团其他页面(返回键)，直到回到 MGCGameActivity 游戏主界面；
+                # 之后由后续 ensure_page 重新打开每日任务弹窗。
+                step_name = step.get("name", "返回每日任务弹窗")
+                self.logger.step("直接", step_name,
+                                 "返回每日任务弹窗：先确保回到游戏主界面")
+                self._return_to_game_main(step)
+                time.sleep(wait_after)
+                screenshot_after = self._take_screenshot()
+                self.logger.save_screenshot(screenshot_after, f"after_{step_name}")
+                return True
+
+            elif action_type == "close_mgc_overlay":
+                # 关闭美团“其他小游戏”内的同 Activity 浮层圆圈按钮
+                # 关键判别：当前是否在【天天现金主游戏】内？
+                #   - 天天现金主游戏 Activity = meituan_game_activity（MGCGameActivity，无后缀）
+                #     此时圆圈按钮是“关闭整个天天现金游戏”的按钮，绝不能点 → 直接跳过
+                #   - 美团其他小游戏 Activity = MGCGameActivity1 / MGCGameActivity2（带后缀）
+                #     此时返回键关不掉，需要点圆圈按钮关闭浮层、回到天天现金 → 检测并点击
+                #   - 第三方 App（已不在美团）→ return_to_game_main 已处理，这里跳过
+                meituan_pkg = step.get(
+                    "package",
+                    self.config.get("meituan_package", "com.sankuai.meituan"))
+                main_activity = self.config.get(
+                    "meituan_game_activity",
+                    "com.meituan.android.mgc.container.MGCGameActivity")
+
+                cur_pkg, cur_act = self.adb.get_current_activity()
+                if cur_pkg == meituan_pkg and cur_act == main_activity:
+                    self.logger.step(
+                        "直接", step_name,
+                        "当前已在天天现金主游戏内(MGCGameActivity)，圆圈按钮会关闭游戏，跳过")
+                    return True
+                if cur_pkg != meituan_pkg:
+                    self.logger.step(
+                        "直接", step_name,
+                        f"当前不在美团App内({cur_pkg})，无需关闭浮层，跳过")
+                    return True
+
+                # 在美团其他小游戏（MGCGameActivity1/...）内：检测并点击圆圈关闭浮层
+                self._do_close_mgc_overlay(step, wait_after, step_name)
+                screenshot_after = self._take_screenshot()
+                self.logger.save_screenshot(screenshot_after, f"after_{step_name}")
+                return True
+
             elif action_type == "wait":
                 duration = step.get("duration", wait_after)
                 self.logger.step("直接", step_name, f"等待 {duration} 秒")
                 time.sleep(duration)
+                return True
+
+            elif action_type == "browse":
+                # 浏览任务：在 duration 秒内持续上下滑动，让页面判定浏览有效
+                # （仅等待不滑动，屏幕内容不动，任务不会被记为完成）
+                duration = float(step.get("duration", 12))
+                self.logger.step("直接", step_name, f"浏览中持续上下滑动 {duration} 秒")
+                start = time.time()
+                toggle = True
+                while time.time() - start < duration:
+                    if toggle:
+                        self.adb.swipe(360, 1000, 360, 400, 300)
+                    else:
+                        self.adb.swipe(360, 400, 360, 1000, 300)
+                    toggle = not toggle
+                    time.sleep(0.8)
+                time.sleep(wait_after)
+                screenshot_after = self._take_screenshot()
+                self.logger.save_screenshot(screenshot_after, f"after_{step_name}")
                 return True
 
             elif action_type == "home":
@@ -237,7 +305,25 @@ class Engine:
                 max_back = step.get("max_back_attempts", 3)
                 entry_find = step.get("entry_find")
                 entry_wait = step.get("entry_wait", 2)
-                return self._ensure_page(target_page, max_back, entry_find, entry_wait)
+                ok = self._ensure_page(target_page, max_back, entry_find, entry_wait)
+                # 改进点2/3：若反复按返回仍到不了目标（如误回 MainActivity / 卡第三方App），
+                # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
+                if not ok and step.get("recovery") == "return_to_game_main":
+                    self.logger.info(f"ensure_page: 导航失败，执行 return_to_game_main 兜底恢复")
+                    self._return_to_game_main(step)
+                    ok = self._ensure_page(target_page, max_back, entry_find, entry_wait)
+                return ok
+
+            elif action_type == "return_to_game_main":
+                # 改进点3：统一“返回游戏主界面”恢复（详见 _return_to_game_main）
+                step_name = step.get("name", "返回游戏主界面")
+                self.logger.step("直接", step_name,
+                                 "确保回到天天现金游戏主界面(MGCGameActivity)")
+                ok = self._return_to_game_main(step)
+                time.sleep(wait_after)
+                screenshot_after = self._take_screenshot()
+                self.logger.save_screenshot(screenshot_after, f"after_{step_name}")
+                return ok
 
             elif action_type == "if_found":
                 # 条件分支：如果找到目标，执行 then_steps 子步骤
@@ -245,9 +331,23 @@ class Engine:
                 then_steps = step.get("then_steps", [])
                 if not find_spec or not then_steps:
                     return True
-                screenshot_path = self._take_screenshot()
-                self.logger.save_screenshot(screenshot_path, f"if_found_{step_name}")
+                # use_last_screenshot: 复用上一张截图（通常是前一步 tap 后的截图），
+                # 用于捕捉“点击后立即弹出、又很快消失”的 toast（如“放置区精灵已满”）。
+                # 若复用截图未命中，再新截一张兜底（toast 可能稍晚出现），避免漏检。
+                use_last = step.get("use_last_screenshot", False)
+                if use_last and self.screenshot_cache:
+                    screenshot_path = self.screenshot_cache
+                    self.logger.save_screenshot(screenshot_path, f"if_found_{step_name}_reuse")
+                else:
+                    screenshot_path = self._take_screenshot()
+                    self.logger.save_screenshot(screenshot_path, f"if_found_{step_name}")
                 result = self._execute_find_action(find_spec, "check", step, screenshot_path)
+                if (not result or not result.found) and use_last and self.screenshot_cache:
+                    # 复用截图未命中：toast 可能稍晚出现，新截一张兜底
+                    time.sleep(step.get("fresh_retry_wait", 1.0))
+                    screenshot_path = self._take_screenshot()
+                    self.logger.save_screenshot(screenshot_path, f"if_found_{step_name}_retry")
+                    result = self._execute_find_action(find_spec, "check", step, screenshot_path)
                 if result and result.found:
                     self.logger.step("直接", step_name, "条件满足，执行 then_steps")
                     for t_step in then_steps:
@@ -452,6 +552,132 @@ class Engine:
         self.logger.info(f"ensure_page: 无法到达目标页面 {target_page}")
         return False
 
+    # ------------------------------------------------------------------
+    # Activity 分类与“返回游戏主界面”统一恢复（两级判定 + 改进点3）
+    # ------------------------------------------------------------------
+    def _classify_activity(self, pkg: str, act_base: str) -> str:
+        """把当前 (pkg, act_base) 分类为恢复策略所用的类别。
+
+        - third_party    第三方 App（非美团）
+        - cash_daily_game 天天现金主游戏（MGCGameActivity，无后缀）
+        - other_mini_game 美团其他小游戏（MGCGameActivity1/2... 带后缀）
+        - meituan_home   美团首页/主页（Activity 含 MainActivity/Launcher/Home 关键字）
+        - meituan_other  美团其他页面（如 MSVPageActivity 等 H5/中转页）
+        """
+        meituan = self.config.get("meituan_package", "com.sankuai.meituan")
+        # meituan_game_activity 为完整类名，取最后一个 “.” 后的 basename 做比较
+        game = self.config.get(
+            "meituan_game_activity",
+            "com.meituan.android.mgc.container.MGCGameActivity").split(".")[-1]
+        if pkg and pkg != meituan:
+            return "third_party"
+        if act_base == game:
+            return "cash_daily_game"
+        if act_base.startswith("MGCGameActivity"):
+            return "other_mini_game"
+        keywords = self.config.get(
+            "meituan_home_activity_keywords",
+            ["MainActivity", "LauncherActivity", "HomeActivity"])
+        if any(k in act_base for k in keywords):
+            return "meituan_home"
+        return "meituan_other"
+
+    def _return_to_game_main(self, step: dict, max_attempts: int = None) -> bool:
+        """统一恢复：确保当前处于天天现金游戏主界面(MGCGameActivity)。
+
+        按 Activity 分类循环处理（改进点3）：
+          - third_party     第三方App      → force-stop 关闭
+          - other_mini_game 美团其他小游戏 → 点圆圈按钮关闭浮层
+          - meituan_home    美团首页        → 点击“天天现金”图标（OCR失败则 am start 置顶游戏页）
+          - meituan_other   美团其他页面    → 按返回键
+          - cash_daily_game 天天现金游戏    → 成功，结束
+        兜底：循环未恢复时，am start 直接把游戏 Activity 置顶/重启。
+        """
+        meituan_pkg = self.config.get("meituan_package", "com.sankuai.meituan")
+        game_activity = self.config.get(
+            "meituan_game_activity",
+            "com.meituan.android.mgc.container.MGCGameActivity")
+        home_find = step.get("home_entry_find") or {"type": "ocr", "text": "天天现金"}
+        max_att = max_attempts or step.get("max_attempts", 15)
+
+        for attempt in range(max_att):
+            pkg, act = self.adb.get_current_activity()
+            act_base = act.split(".")[-1] if act else ""
+            cat = self._classify_activity(pkg, act_base)
+            self.logger.info(
+                f"return_to_game_main: 尝试{attempt+1}/{max_att} 当前({pkg}/{act_base}) → {cat}")
+
+            if cat == "cash_daily_game":
+                self.logger.info("return_to_game_main: 已在天天现金游戏主界面(MGCGameActivity)")
+                return True
+            elif cat == "third_party":
+                self.logger.info(f"return_to_game_main: 第三方App({pkg})，force-stop 关闭")
+                self.adb.force_stop(pkg)
+                time.sleep(1.5)
+            elif cat == "other_mini_game":
+                self.logger.info("return_to_game_main: 美团其他小游戏浮层，点击圆圈关闭")
+                self._do_close_mgc_overlay(step, 1.5)
+            elif cat == "meituan_home":
+                self.logger.info("return_to_game_main: 美团首页，点击'天天现金'进入游戏")
+                tapped = self._tap_find(home_find, offset_y=-80, wait_after=3)
+                if not tapped:
+                    self.logger.info("return_to_game_main: 未找到'天天现金'，am start 置顶游戏页")
+                    self.adb.bring_to_front(meituan_pkg, game_activity)
+                    time.sleep(2)
+            else:  # meituan_other
+                self.logger.info(f"return_to_game_main: 美团其他页面({act_base})，按返回键")
+                self.adb.press_back()
+                time.sleep(1.5)
+
+        # 兜底：am start 直接把游戏 Activity 置顶/重启
+        self.logger.info("return_to_game_main: 循环未恢复，尝试 am start 重新进入游戏")
+        self.adb.bring_to_front(meituan_pkg, game_activity)
+        time.sleep(2)
+        pkg, act = self.adb.get_current_activity()
+        act_base = act.split(".")[-1] if act else ""
+        ok = self._classify_activity(pkg, act_base) == "cash_daily_game"
+        if not ok:
+            self.logger.info(f"return_to_game_main: 兜底仍失败，当前({pkg}/{act_base})")
+        return ok
+
+    def _do_close_mgc_overlay(self, step: dict, wait_after: float = 1.5, step_name: str = "关闭浮层"):
+        """检测并点击美团其他小游戏内的同 Activity 浮层圆圈按钮。"""
+        find_spec = step.get("find", {}) or {}
+        roi = tuple(find_spec["roi"]) if find_spec.get("roi") else None
+        screenshot_path = self._take_screenshot()
+        self.logger.save_screenshot(screenshot_path, f"if_found_{step_name}")
+        res = self.finder.find_template(
+            screenshot_path,
+            template_name=find_spec.get("template", "close_btn_mgc_overlay.png"),
+            roi=roi,
+            threshold=find_spec.get("threshold", 0.8),
+            process=find_spec.get("process", "raw"),
+        )
+        if res and res.found:
+            coords = step.get("close_coords", [655, 72])
+            self.adb.tap(int(coords[0]), int(coords[1]))
+            self.logger.step(
+                "直接", step_name,
+                f"检测到美团小游戏浮层圆圈按钮，点击固定坐标 {coords} 关闭浮层")
+        else:
+            self.logger.step("直接", step_name, "未检测到浮层圆圈按钮，跳过")
+        time.sleep(wait_after)
+
+    def _tap_find(self, find_spec: dict, offset_y: int = 0, wait_after: float = 1.5) -> bool:
+        """截图→查找→点击（带偏移），用于点击“天天现金”等入口。"""
+        if not find_spec:
+            return False
+        screenshot_path = self._take_screenshot()
+        self.logger.save_screenshot(screenshot_path, "tap_find")
+        result = self._execute_find_action(find_spec, "tap", {}, screenshot_path)
+        if result and result.found:
+            self.adb.tap(result.x, result.y + offset_y)
+            self.logger.info(f"tap_find: 点击 @ ({result.x},{result.y+offset_y})")
+            time.sleep(wait_after)
+            return True
+        self.logger.info(f"tap_find: 未找到目标 {find_spec}")
+        return False
+
     def _take_screenshot(self) -> str:
         """截图"""
         path = self.adb.screenshot()
@@ -643,4 +869,12 @@ class Engine:
                 tolerance=find_spec.get("tolerance", 30),
                 min_ratio=find_spec.get("min_ratio", 0.01),
             )
+        elif type_ == "fixed":
+            # 固定坐标：返回指定的屏幕坐标（用于位置固定的 UI 元素，
+            # 如美团游戏内同 Activity 浮层的关闭圆圈按钮）。始终 found=True。
+            coords = find_spec.get("coords")
+            if coords and len(coords) == 2:
+                x, y = int(coords[0]), int(coords[1])
+                return FinderResult(x, y, 1.0, "fixed", f"fixed({x},{y})")
+            return None
         return None

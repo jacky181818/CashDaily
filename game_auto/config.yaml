@@ -15,3 +15,14 @@ default_wait_after: 1.5   # 动作后等待秒数
 
 # OCR 开关（需要安装 paddleocr）
 ocr_enabled: true
+
+# 美团包名 / 游戏 Activity（用于"返回游戏主界面"时识别与恢复）
+meituan_package: "com.sankuai.meituan"
+meituan_game_activity: "com.meituan.android.mgc.container.MGCGameActivity"
+
+# 美团“首页/主页” Activity 类名关键字（用于两级判定中分类“美团首页”）
+# 命中这些关键字的 Activity 视为美团首页，恢复时点击“天天现金”图标进入游戏。
+meituan_home_activity_keywords:
+  - "MainActivity"
+  - "LauncherActivity"
+  - "HomeActivity"

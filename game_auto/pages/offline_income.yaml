@@ -1,4 +1,6 @@
 name: offline_income
+# 第一级容器约束：只在天天现金主游戏(MGCGameActivity)内才做视觉匹配
+activity: MGCGameActivity
 identify:
   - type: ocr
     text: "离线收益"

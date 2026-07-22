@@ -1,6 +1,9 @@
 name: congrats_popup
 description: 恭喜获得弹窗（浏览任务场景）。用户指定选择"歇会再看"，避免额外跳转。
 
+# 第一级容器约束：只在天天现金主游戏(MGCGameActivity)内才做视觉匹配
+activity: MGCGameActivity
+
 identify:
   - type: ocr
     text: "恭喜获得"

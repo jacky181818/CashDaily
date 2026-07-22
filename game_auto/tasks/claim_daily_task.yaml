@@ -5,9 +5,16 @@ description: 进入游戏 → 主界面点击任务按钮 → 领取所有奖励
 check_and_merge: &check_and_merge
   name: 检测放置区满并执行一键合成
   action: if_found
+  # 复用上一步(tap 去完成/去领取)后的截图来检测 toast：
+  # “放置区已满”提示是点击后立即弹出、约 1~2 秒后消失的短命 toast，
+  # 若 if_found 重新截图会错过它。复用截图即可稳定捕捉；未命中再新截一张兜底。
+  use_last_screenshot: true
   find:
     type: ocr
-    text: "放置区角色已达上限"
+    # 天天现金的“放置区已满”提示有两种文案，任意命中其一即触发一键合成。
+    text:
+      - "放置区角色已达上限"
+      - "放置区精灵已满"
     threshold: 0.5
   then_steps:
     - name: 关闭每日任务弹窗
@@ -30,6 +37,26 @@ check_and_merge: &check_and_merge
         roi: [500, 1400, 180, 120]
         threshold: 0.4
       wait_after: 2
+
+# 可复用：关闭美团“其他小游戏”内同 Activity 浮层（右上角圆圈按钮）
+# 注意：圆圈按钮在【天天现金主游戏】的每日任务弹窗上 = “关闭整个游戏”按钮，绝不能点！
+# 只有当跳到美团【其他小游戏】（Activity 为 MGCGameActivity1/... 带后缀，非天天现金）时，
+# 才需要点圆圈按钮关闭浮层回到天天现金。引擎动作 close_mgc_overlay 会先判定当前 Activity：
+#   - 当前 == 天天现金主游戏(MGCGameActivity) → 跳过（否则会误关游戏）
+#   - 当前 == 美团其他小游戏(MGCGameActivity1/...) → 检测并点圆圈(固定坐标)关闭
+#   - 当前不在美团(第三方App) → return_to_task 已处理，跳过
+# 圆圈按钮位置固定（x:620 y:45 w:70 h:55 → 中心 (655,72)）。
+close_mgc_overlay: &close_mgc_overlay
+  name: 关闭美团其他小游戏浮层圆圈按钮
+  action: close_mgc_overlay
+  find:
+    type: template
+    template: close_btn_mgc_overlay.png
+    process: raw
+    threshold: 0.8
+    roi: [610, 35, 90, 80]      # 右上角圆圈按钮区域（按固定位置缩小搜索范围）
+  close_coords: [655, 72]       # 圆圈按钮中心（x:620 y:45 w:70 h:55 → 中心约 (655,72)）
+  wait_after: 2
 
 steps:
   # ===== 进入游戏（如果当前在登录界面） =====
@@ -57,7 +84,7 @@ steps:
     wait_after: 2                 # 等待"每日任务"弹窗
 
   # 2. 循环领取所有"去领取"奖励
-  #    每次迭代：ensure_page确认在弹窗 → 点击去领取 → 关闭可能出现的弹窗
+  #    每次迭代：ensure_page确认在弹窗 → 点击去领取（点击后无弹窗，无需等待/处理弹窗）
   - name: 领取去领取奖励
     loop: 50
     loop_steps:
@@ -65,6 +92,9 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
+        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
+        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
+        recovery: return_to_game_main
         entry_find:
           type: ocr
           text: "任务"
@@ -80,13 +110,9 @@ steps:
           threshold: 0.5
           exact_match: true
           roi: [520, 600, 180, 800]    # 覆盖弹窗中"去领取"按钮区域
-        wait_after: 3                   # 等待弹窗可能出现
-      - name: 处理去看看弹窗
-        page: browse_congrats_popup
-        fallback: {action: skip}
-      - name: 关闭开心收下弹窗
-        page: congrats_popup
-        fallback: {action: skip}
+        wait_after: 2                   # 留出时间让"放置区已满"提示出现，供下方 check_and_merge 检测
+      - <<: *check_and_merge            # 若点击去领取因放置区满而失败（"放置区角色已达上限"），
+                                        # 关闭弹窗→一键合成→重开弹窗，腾出空间后下次迭代即可领取成功
 
   # 3. 关闭可能残留的弹窗
   - page: congrats_popup
@@ -95,7 +121,7 @@ steps:
 
   # ===== 第二阶段：逐个完成浏览任务 =====
   # 每个浏览任务的循环结构：
-  #   ensure_page → 查找anchor+去完成 → 等待浏览 → 返回 → 处理弹窗
+  #   ensure_page → 查找anchor+去完成 → 浏览滑动(必须上下滑动才计时) → 返回 → 处理弹窗
 
   # 4. 浏览优惠活动（多次任务，浏览 10 秒）
   - name: 浏览优惠活动
@@ -105,6 +131,9 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
+        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
+        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
+        recovery: return_to_game_main
         entry_find:
           type: ocr
           text: "任务"
@@ -126,11 +155,12 @@ steps:
         wait_after: 2
       - <<: *check_and_merge
       - name: 等待浏览
-        action: wait
+        action: browse
         duration: 12
-      - name: 返回
-        action: back
+      - name: 返回每日任务弹窗
+        action: return_to_task
         wait_after: 2
+      - <<: *close_mgc_overlay
       - name: 处理去看看弹窗
         page: browse_congrats_popup
         fallback: {action: skip}
@@ -146,6 +176,9 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
+        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
+        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
+        recovery: return_to_game_main
         entry_find:
           type: ocr
           text: "任务"
@@ -167,11 +200,12 @@ steps:
         wait_after: 2
       - <<: *check_and_merge
       - name: 等待浏览
-        action: wait
+        action: browse
         duration: 12
-      - name: 返回
-        action: back
+      - name: 返回每日任务弹窗
+        action: return_to_task
         wait_after: 2
+      - <<: *close_mgc_overlay
       - name: 处理去看看弹窗
         page: browse_congrats_popup
         fallback: {action: skip}
@@ -187,6 +221,9 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
+        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
+        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
+        recovery: return_to_game_main
         entry_find:
           type: ocr
           text: "任务"
@@ -208,11 +245,12 @@ steps:
         wait_after: 2
       - <<: *check_and_merge
       - name: 等待浏览
-        action: wait
+        action: browse
         duration: 12
-      - name: 返回
-        action: back
+      - name: 返回每日任务弹窗
+        action: return_to_task
         wait_after: 2
+      - <<: *close_mgc_overlay
       - name: 处理去看看弹窗
         page: browse_congrats_popup
         fallback: {action: skip}
@@ -228,6 +266,9 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
+        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
+        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
+        recovery: return_to_game_main
         entry_find:
           type: ocr
           text: "任务"
@@ -249,11 +290,12 @@ steps:
         wait_after: 2
       - <<: *check_and_merge
       - name: 等待浏览
-        action: wait
+        action: browse
         duration: 12
-      - name: 返回
-        action: back
+      - name: 返回每日任务弹窗
+        action: return_to_task
         wait_after: 2
+      - <<: *close_mgc_overlay
       - name: 处理去看看弹窗
         page: browse_congrats_popup
         fallback: {action: skip}
@@ -269,6 +311,9 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
+        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
+        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
+        recovery: return_to_game_main
         entry_find:
           type: ocr
           text: "任务"
@@ -290,11 +335,12 @@ steps:
         wait_after: 2
       - <<: *check_and_merge
       - name: 等待浏览
-        action: wait
+        action: browse
         duration: 12
-      - name: 返回
-        action: back
+      - name: 返回每日任务弹窗
+        action: return_to_task
         wait_after: 2
+      - <<: *close_mgc_overlay
       - name: 处理去看看弹窗
         page: browse_congrats_popup
         fallback: {action: skip}
@@ -310,6 +356,9 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
+        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
+        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
+        recovery: return_to_game_main
         entry_find:
           type: ocr
           text: "任务"
@@ -331,11 +380,12 @@ steps:
         wait_after: 2
       - <<: *check_and_merge
       - name: 等待浏览
-        action: wait
-        duration: 32
-      - name: 返回
-        action: back
+        action: browse
+        duration: 30
+      - name: 返回每日任务弹窗
+        action: return_to_task
         wait_after: 2
+      - <<: *close_mgc_overlay
       - name: 处理去看看弹窗
         page: browse_congrats_popup
         fallback: {action: skip}
@@ -351,6 +401,9 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
+        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
+        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
+        recovery: return_to_game_main
         entry_find:
           type: ocr
           text: "任务"
@@ -372,11 +425,12 @@ steps:
         wait_after: 2
       - <<: *check_and_merge
       - name: 等待浏览
-        action: wait
+        action: browse
         duration: 12
-      - name: 返回
-        action: back
+      - name: 返回每日任务弹窗
+        action: return_to_task
         wait_after: 2
+      - <<: *close_mgc_overlay
       - name: 处理去看看弹窗
         page: browse_congrats_popup
         fallback: {action: skip}
@@ -392,6 +446,9 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
+        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
+        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
+        recovery: return_to_game_main
         entry_find:
           type: ocr
           text: "任务"
@@ -413,11 +470,12 @@ steps:
         wait_after: 2
       - <<: *check_and_merge
       - name: 等待浏览
-        action: wait
+        action: browse
         duration: 7
-      - name: 返回
-        action: back
+      - name: 返回每日任务弹窗
+        action: return_to_task
         wait_after: 2
+      - <<: *close_mgc_overlay
       - name: 处理去看看弹窗
         page: browse_congrats_popup
         fallback: {action: skip}

@@ -1,5 +1,6 @@
 """Finder 模块：三种定位策略（找图、OCR、找颜色）"""
 import os
+from typing import Union, List
 import cv2
 import numpy as np
 from PIL import Image
@@ -123,12 +124,13 @@ class Finder:
         return FinderResult(cx, cy, best_score, "template",
                             f"template={template_name} scale={best_scale:.2f} roi={roi}")
 
-    def find_ocr(self, screenshot_path: str, target_text: str,
+    def find_ocr(self, screenshot_path: str, target_text: Union[str, List[str]],
                  roi: tuple = None, threshold: float = 0.5,
                  exact_match: bool = False) -> FinderResult | None:
         """
         找文字策略：OCR 识别文字位置（使用 RapidOCR）
 
+        target_text: 要查找的文字（字符串或字符串列表，列表时命中任意一个即返回）。
         roi: (x, y, w, h) 搜索区域限制
         threshold: 最低置信度阈值
         exact_match: 是否要求文本完全相等（避免 "去捕捉" 误匹配 "浏览去捕捉"）
@@ -155,6 +157,9 @@ class Finder:
         if not ocr_result:
             return FinderResult(0, 0, 0, "ocr", f"OCR 无结果")
 
+        # 支持多个候选关键词（任意命中一个即返回）。
+        targets = target_text if isinstance(target_text, (list, tuple)) else [target_text]
+
         best_match = None
         best_conf = 0
 
@@ -163,25 +168,32 @@ class Finder:
             text = item[1]   # 识别的文字
             conf = float(item[2])  # 置信度
 
-            # 匹配方式：精确 vs 包含
-            if exact_match:
-                is_match = (target_text == text)
-            else:
-                is_match = (target_text in text)
+            if conf < threshold:
+                continue
 
-            if is_match and conf >= threshold:
-                # 计算中心坐标（加上 ROI 偏移）
-                cx = int((box[0][0] + box[2][0]) / 2) + rx
-                cy = int((box[0][1] + box[2][1]) / 2) + ry
-                if conf > best_conf:
-                    best_conf = conf
-                    best_match = FinderResult(cx, cy, conf, "ocr",
-                                              f"text={text!r} target={target_text!r} exact={exact_match}")
+            for target in targets:
+                # 匹配方式：精确 vs 包含
+                if exact_match:
+                    is_match = (target == text)
+                else:
+                    is_match = (target in text)
+
+                if is_match:
+                    # 计算中心坐标（加上 ROI 偏移）
+                    cx = int((box[0][0] + box[2][0]) / 2) + rx
+                    cy = int((box[0][1] + box[2][1]) / 2) + ry
+                    if conf > best_conf:
+                        best_conf = conf
+                        matched_target = target
+                        best_match = FinderResult(cx, cy, conf, "ocr",
+                                                  f"text={text!r} target={matched_target!r} exact={exact_match}")
+                    break  # 当前 item 已命中，无需再检查其他 target
 
         if best_match:
             return best_match
 
-        return FinderResult(0, 0, 0, "ocr", f"未找到 '{target_text}' (阈值 {threshold}, 精确={exact_match})")
+        return FinderResult(0, 0, 0, "ocr",
+                            f"未找到 {targets!r} (阈值 {threshold}, 精确={exact_match})")
 
     def find_ocr_relative(self, screenshot_path: str, anchor_text: str, target_text: str,
                           anchor_roi: tuple = None, y_range: int = 60,

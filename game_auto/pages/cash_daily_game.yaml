@@ -1,0 +1,9 @@
+name: cash_daily_game
+description: 天天现金游戏主界面（MGCGameActivity）。两级识别的第二级兜底：当没有具体弹窗页
+  命中时，只要当前 Activity 为 MGCGameActivity（天天现金主游戏）就识别为游戏主界面。
+  用于确保“游戏主界面 Activity 一定是 MGCGameActivity”，杜绝误回 MainActivity。
+
+identify:
+  # 纯 Activity 识别（无需截图/模板/OCR），由 engine 的两级识别在第二级兜底匹配
+  - type: activity
+    activity: MGCGameActivity

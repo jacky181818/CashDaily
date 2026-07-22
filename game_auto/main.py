@@ -46,7 +46,7 @@ def main():
     adb = ADB(config["adb_path"], config.get("device"))
     finder = Finder(templates_dir, config.get("default_threshold", 0.55),
                     ocr_enabled=config.get("ocr_enabled", False))
-    page_manager = PageManager(pages_dir)
+    page_manager = PageManager(pages_dir, get_activity_callback=adb.get_current_activity)
     logger = Logger(logs_dir)
 
     # 检查设备连接

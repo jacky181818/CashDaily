@@ -1,6 +1,10 @@
 name: daily_task_popup
 description: 每日任务弹窗
 
+# 第一级容器约束：只在天天现金主游戏(MGCGameActivity)内才做视觉匹配，
+# 避免美团首页/其他小游戏里出现“每日任务”字样时被误判。
+activity: MGCGameActivity
+
 identify:
   - type: ocr
     text: "每日任务"

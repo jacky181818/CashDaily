@@ -20,4 +20,11 @@ steps:
     skip_if_not_found: true
     wait_after: 3
 
+  # 改进点1：点击“天天现金”后，确认是否真正进入 MGCGameActivity 游戏页。
+  # return_to_game_main 会按 Activity 分类恢复：若误停在美团首页/其他页面/第三方App，
+  # 自动点击天天现金 / 按返回键 / force-stop 第三方，直到 Activity == MGCGameActivity。
+  - name: 确认进入天天现金游戏(MGCGameActivity)
+    action: return_to_game_main
+    wait_after: 2
+
   # 注：主界面弹窗（离线收益、连续签到、限时福利等）由 handle_main_popups.yaml 统一处理

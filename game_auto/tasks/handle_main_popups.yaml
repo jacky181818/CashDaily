@@ -41,7 +41,7 @@ steps:
         find:
           type: ocr
           text: "日签到"
-          roi: [200, 100, 400, 200]     # 弹窗标题区域
+          roi: [200, 120, 400, 250]     # 弹窗标题区域（实际标题中心约 y=310~320）
           threshold: 0.5
         then_steps:
           - name: 执行连续签到任务
@@ -78,7 +78,7 @@ steps:
         find:
           type: ocr
           text: "日签到"
-          roi: [200, 100, 400, 200]
+          roi: [200, 120, 400, 250]
           threshold: 0.4
         action: check
         skip_if_not_found: true
@@ -98,7 +98,7 @@ steps:
         find:
           type: ocr
           text: "日签到"
-          roi: [200, 100, 400, 200]
+          roi: [200, 120, 400, 250]
           threshold: 0.4
         action: check
         break_loop_if_not_found: true   # 找不到任何弹窗标题 = 无弹窗 = 退出循环
