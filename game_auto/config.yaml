@@ -1,5 +1,5 @@
 # 全局配置
-adb_path: "D:\\AppBundles\\Scrcpy\\adb.exe"
+adb_path: "C:\\AppBundles\\AndroidSDK_28\\platform-tools\\adb.exe"
 device: null  # null 表示自动选择，或填写设备 ID 如 "NABDU20728004929"
 
 # 模板和页面目录（相对于 game_auto 目录）

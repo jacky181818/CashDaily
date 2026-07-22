@@ -58,6 +58,40 @@ close_mgc_overlay: &close_mgc_overlay
   close_coords: [655, 72]       # 圆圈按钮中心（x:620 y:45 w:70 h:55 → 中心约 (655,72)）
   wait_after: 2
 
+# 可复用：点击"去完成"后，页面顶部可能出现广告倒计时：
+# "xx秒后点击广告得丰富奖励" → 等待变成 "点击立得丰富奖励" → 点击。
+# 如果未检测到该广告文案，则执行正常的 browse 浏览动作。
+handle_ad_reward: &handle_ad_reward
+  name: 处理广告奖励
+  action: if_found
+  find:
+    type: ocr
+    text:
+      - "秒后点击广告得丰富奖励"
+      - "点击立得丰富奖励"
+    roi: [0, 0, 720, 220]      # 顶部倒计时文字区域
+    threshold: 0.5
+  then_steps:
+    - name: 等待广告可点击
+      action: wait_until_found
+      find:
+        type: ocr
+        text: "点击立得丰富奖励"
+        roi: [0, 0, 720, 220]
+        threshold: 0.5
+      interval: 1
+      timeout: 15
+      timeout_action: skip
+      then_steps:
+        - name: 点击立得丰富奖励
+          action: tap
+          find:
+            type: ocr
+            text: "点击立得丰富奖励"
+            roi: [0, 0, 720, 220]
+            threshold: 0.5
+          wait_after: 2
+
 steps:
   # ===== 进入游戏（如果当前在登录界面） =====
   - name: 进入游戏
@@ -154,9 +188,11 @@ steps:
           exact_match: true
         wait_after: 2
       - <<: *check_and_merge
-      - name: 等待浏览
-        action: browse
-        duration: 12
+      - <<: *handle_ad_reward
+        else_steps:
+          - name: 等待浏览
+            action: browse
+            duration: 12
       - name: 返回每日任务弹窗
         action: return_to_task
         wait_after: 2
@@ -199,9 +235,11 @@ steps:
           exact_match: true
         wait_after: 2
       - <<: *check_and_merge
-      - name: 等待浏览
-        action: browse
-        duration: 12
+      - <<: *handle_ad_reward
+        else_steps:
+          - name: 等待浏览
+            action: browse
+            duration: 12
       - name: 返回每日任务弹窗
         action: return_to_task
         wait_after: 2
@@ -244,9 +282,11 @@ steps:
           exact_match: true
         wait_after: 2
       - <<: *check_and_merge
-      - name: 等待浏览
-        action: browse
-        duration: 12
+      - <<: *handle_ad_reward
+        else_steps:
+          - name: 等待浏览
+            action: browse
+            duration: 12
       - name: 返回每日任务弹窗
         action: return_to_task
         wait_after: 2
@@ -289,9 +329,11 @@ steps:
           exact_match: true
         wait_after: 2
       - <<: *check_and_merge
-      - name: 等待浏览
-        action: browse
-        duration: 12
+      - <<: *handle_ad_reward
+        else_steps:
+          - name: 等待浏览
+            action: browse
+            duration: 12
       - name: 返回每日任务弹窗
         action: return_to_task
         wait_after: 2
@@ -334,9 +376,11 @@ steps:
           exact_match: true
         wait_after: 2
       - <<: *check_and_merge
-      - name: 等待浏览
-        action: browse
-        duration: 12
+      - <<: *handle_ad_reward
+        else_steps:
+          - name: 等待浏览
+            action: browse
+            duration: 12
       - name: 返回每日任务弹窗
         action: return_to_task
         wait_after: 2
@@ -379,9 +423,11 @@ steps:
           exact_match: true
         wait_after: 2
       - <<: *check_and_merge
-      - name: 等待浏览
-        action: browse
-        duration: 30
+      - <<: *handle_ad_reward
+        else_steps:
+          - name: 等待浏览
+            action: browse
+            duration: 30
       - name: 返回每日任务弹窗
         action: return_to_task
         wait_after: 2
@@ -424,9 +470,11 @@ steps:
           exact_match: true
         wait_after: 2
       - <<: *check_and_merge
-      - name: 等待浏览
-        action: browse
-        duration: 12
+      - <<: *handle_ad_reward
+        else_steps:
+          - name: 等待浏览
+            action: browse
+            duration: 12
       - name: 返回每日任务弹窗
         action: return_to_task
         wait_after: 2
@@ -469,9 +517,11 @@ steps:
           exact_match: true
         wait_after: 2
       - <<: *check_and_merge
-      - name: 等待浏览
-        action: browse
-        duration: 7
+      - <<: *handle_ad_reward
+        else_steps:
+          - name: 等待浏览
+            action: browse
+            duration: 7
       - name: 返回每日任务弹窗
         action: return_to_task
         wait_after: 2

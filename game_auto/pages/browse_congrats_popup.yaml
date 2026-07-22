@@ -11,10 +11,12 @@ identify:
     threshold: 0.5
 
 actions:
-  - name: 点击歇会再看按钮
+  - name: 点击关闭按钮
     find:
       type: ocr
-      text: "歇会再看"
+      text:
+        - "开心收下"
+        - "歇会再看"
       roi: [100, 1000, 520, 400]
       threshold: 0.5
     action: tap

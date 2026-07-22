@@ -359,8 +359,61 @@ class Engine:
                             return False
                     return True
                 else:
-                    self.logger.step("直接", step_name, "条件未满足，跳过")
+                    self.logger.step("直接", step_name, "条件未满足，执行 else_steps")
+                    else_steps = step.get("else_steps", [])
+                    for e_step in else_steps:
+                        e_desc = e_step.get("name", "未命名")
+                        self.logger.info(f"  if_found else 子步骤: {e_desc}")
+                        success = self._process_step(e_step)
+                        if not success:
+                            self.logger.info(f"  if_found else 子步骤 {e_desc} 失败")
+                            return False
                     return True
+
+            elif action_type == "wait_until_found":
+                # 循环等待目标出现，找到后执行 then_steps
+                # 用于处理广告倒计时：等待 "点击立得丰富奖励" 文字出现后再点击
+                find_spec = step.get("find")
+                then_steps = step.get("then_steps", [])
+                interval = float(step.get("interval", 1.0))
+                timeout = float(step.get("timeout", 15.0))
+                timeout_action = step.get("timeout_action", "fail")  # fail / skip
+
+                if not find_spec:
+                    return True
+
+                start = time.time()
+                found = False
+                result = None
+                while time.time() - start < timeout:
+                    screenshot_path = self._take_screenshot()
+                    self.logger.save_screenshot(screenshot_path, f"wait_until_found_{step_name}")
+                    result = self._execute_find_action(find_spec, "check", step, screenshot_path)
+                    if result and result.found:
+                        found = True
+                        self.logger.step("直接", step_name,
+                                         f"找到目标 @ ({result.x}, {result.y}) 置信度 {result.confidence:.3f} [{result.detail}]")
+                        break
+                    remaining = max(0, timeout - (time.time() - start))
+                    self.logger.info(f"wait_until_found: 未找到目标，{interval}秒后重试 (剩余 {remaining:.1f}s)")
+                    time.sleep(interval)
+
+                if not found:
+                    msg = f"wait_until_found: 超时 ({timeout}秒) 未找到目标"
+                    self.logger.step("直接", step_name, msg)
+                    if timeout_action == "skip":
+                        return True
+                    return False
+
+                # 执行 then_steps
+                for t_step in then_steps:
+                    t_desc = t_step.get("name", "未命名")
+                    self.logger.info(f"  wait_until_found 子步骤: {t_desc}")
+                    success = self._process_step(t_step)
+                    if not success:
+                        self.logger.info(f"  wait_until_found 子步骤 {t_desc} 失败")
+                        return False
+                return True
 
             elif action_type == "run_subtask":
                 # 执行另一个子任务文件
