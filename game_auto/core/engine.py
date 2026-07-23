@@ -299,6 +299,10 @@ class Engine:
                 self.logger.save_screenshot(screenshot_after, f"after_{step_name}")
                 return True
 
+            elif action_type == "scroll_find":
+                # 滚动查找：在可滚动区域内查找目标，找不到就上滑一页继续
+                return self._do_scroll_find(step, wait_after, step_name)
+
             elif action_type == "ensure_page":
                 # 确保当前在目标页面，如果不在则通过返回+重入导航
                 target_page = step.get("target_page")
@@ -692,6 +696,92 @@ class Engine:
         if not ok:
             self.logger.info(f"return_to_game_main: 兜底仍失败，当前({pkg}/{act_base})")
         return ok
+
+    def _do_scroll_find(self, step: dict, wait_after: float, step_name: str) -> bool:
+        """滚动查找：在可滚动区域内查找目标，若当前屏未找到则上滑一页继续。
+
+        参数：
+          - find: 查找规则（ocr/ocr_relative/template/color/fixed）
+          - anchor_text + target_text: 简写 ocr_relative，在 anchor 附近找 target
+          - stop_scroll_if_found: 停止滑动的检测规则。当前屏主规则未命中时，若检测到
+            此规则命中，则立即停止滑动并返回 False（不点击）。
+            用途：查找"去领取"时，若当前屏有"去完成"说明"去领取"已全部领完，
+            无需继续滑动，直接跳出让后续步骤处理"去完成"任务。
+          - max_swipes: 最大滑动次数（默认 10）
+          - swipe_coords: [x1, y1, x2, y2, duration] 滑动参数（默认向上滑一页 [360,1400,360,700,300]）
+          - action_on_found: 找到后的动作，"tap"（默认）或 "check"
+          - offset_x / offset_y: tap 时的点击偏移
+          - swipe_wait: 每次滑动后的等待时间（默认 1.0 秒）
+
+        用于每日任务弹窗滚动区查找"去领取"/"去完成"：若当前屏没有，上滑一页继续找。
+        """
+        find_spec = step.get("find")
+        anchor_text = step.get("anchor_text")
+        target_text = step.get("target_text")
+
+        # 简写：直接提供 anchor_text + target_text，自动构造 ocr_relative
+        if not find_spec and anchor_text and target_text:
+            find_spec = {
+                "type": "ocr_relative",
+                "anchor_text": anchor_text,
+                "target_text": target_text,
+                "anchor_roi": step.get("anchor_roi", [25, 680, 670, 870]),
+                "y_range": step.get("y_range", 80),
+                "x_range": step.get("x_range", [300, 720]),
+                "threshold": step.get("threshold", 0.5),
+                "exact_match": step.get("exact_match", True),
+            }
+
+        if not find_spec:
+            self.logger.info(f"scroll_find: 缺少 find 规则或 anchor_text/target_text")
+            return False
+
+        # 停止滑动的检测规则：主规则未命中时，若此规则命中则提前终止滑动
+        stop_scroll_spec = step.get("stop_scroll_if_found")
+
+        max_swipes = int(step.get("max_swipes", 10))
+        swipe_coords = step.get("swipe_coords", [360, 1400, 360, 700, 300])
+        action_on_found = step.get("action_on_found", "tap")
+        offset_x = int(step.get("offset_x", 0))
+        offset_y = int(step.get("offset_y", 0))
+        swipe_wait = float(step.get("swipe_wait", 1.0))
+
+        for i in range(max_swipes + 1):
+            screenshot_path = self._take_screenshot()
+            self.logger.save_screenshot(screenshot_path, f"scroll_find_{step_name}_{i}")
+
+            result = self._execute_find_action(find_spec, action_on_found, step, screenshot_path)
+            if result and result.found:
+                self.logger.step(
+                    "直接", step_name,
+                    f"第{i+1}屏找到目标 @ ({result.x}, {result.y}) 置信度 {result.confidence:.3f} [{result.detail}]")
+
+                if action_on_found == "tap":
+                    tap_x = result.x + offset_x
+                    tap_y = result.y + offset_y
+                    self.adb.tap(tap_x, tap_y)
+                    self.logger.info(f"tap ({tap_x}, {tap_y}) [偏移: ({offset_x}, {offset_y})]")
+                    time.sleep(wait_after)
+                    screenshot_after = self._take_screenshot()
+                    self.logger.save_screenshot(screenshot_after, f"after_{step_name}")
+                return True
+
+            # 主规则未命中：检查是否应提前停止滑动
+            if stop_scroll_spec:
+                stop_result = self._execute_find_action(stop_scroll_spec, "check", step, screenshot_path)
+                if stop_result and stop_result.found:
+                    self.logger.step(
+                        "直接", step_name,
+                        f"第{i+1}屏检测到停止信号 [{stop_result.detail}]，停止滑动")
+                    return False
+
+            if i < max_swipes:
+                self.logger.info(f"scroll_find: 第{i+1}屏未找到，上滑一页")
+                self.adb.swipe(*swipe_coords)
+                time.sleep(swipe_wait)
+
+        self.logger.step("直接", step_name, f"滑动 {max_swipes} 次后仍未找到目标")
+        return False
 
     def _do_close_mgc_overlay(self, step: dict, wait_after: float = 1.5, step_name: str = "关闭浮层"):
         """检测并点击美团其他小游戏内的同 Activity 浮层圆圈按钮。"""

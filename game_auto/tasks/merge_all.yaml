@@ -19,13 +19,24 @@ steps:
     loop: 6                          # 最多6轮（经过测试6次就能合成完毕）
     loop_break_on_fail: false         # 不因失败中断循环
     loop_steps:
+      # 0. 优先检测 toast "高等级角色请手动合成"，出现则说明无可合成精灵，退出循环
+      - name: 检测合成完毕toast
+        action: check
+        find:
+          type: ocr
+          text: "高等级角色请手动合成"
+          threshold: 0.5
+        break_loop_if_found: true
+        skip_if_not_found: true
+        wait_after: 2
+
       # 1. 检测并处理广告弹窗（"下单可领3000红包"）
       - name: 检测并关闭广告弹窗
         action: if_found
         find:
           type: ocr
           text: "下单可领3000红包"
-          threshold: 0.5
+          threshold: 0.8
         then_steps:
           - name: 点击广告弹窗关闭按钮
             find:
@@ -42,7 +53,7 @@ steps:
         find:
           type: ocr
           text: "天降福利"
-          threshold: 0.5
+          threshold: 0.8
         then_steps:
           - name: 点击天降福利关闭按钮
             find:
@@ -96,4 +107,4 @@ steps:
           threshold: 0.5
         action: tap
         skip_if_not_found: true         # 找不到按钮时跳过（可能按钮被遮挡）
-        wait_after: 2.0               # 等待合成动画
+        wait_after: 1.0               # 等待合成动画

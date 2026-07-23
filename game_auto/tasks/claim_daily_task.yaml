@@ -58,6 +58,27 @@ close_mgc_overlay: &close_mgc_overlay
   close_coords: [655, 72]       # 圆圈按钮中心（x:620 y:45 w:70 h:55 → 中心约 (655,72)）
   wait_after: 2
 
+# 可复用：关闭"惊喜礼包"弹窗（该弹窗可能覆盖在每日任务弹窗上方，导致无法点击任务按钮）
+# 使用 template 匹配关闭按钮（右上角 X），避免 OCR 误识别主界面小字"惊喜礼包"。
+close_surprise_gift: &close_surprise_gift
+  name: 关闭惊喜礼包弹窗
+  action: if_found
+  find:
+    type: ocr
+    text: "惊喜礼包翻倍领取"
+    roi: [125, 275, 480, 80]   # OCR box: (147,292)-(581,341)，留余量
+    threshold: 0.8
+  then_steps:
+    - name: 点击惊喜礼包关闭按钮
+      action: tap
+      find:
+        type: template
+        template: close_btn_surprise_gift.png
+        process: raw
+        threshold: 0.85
+        roi: [600, 180, 70, 70]
+      wait_after: 2
+
 # 可复用：点击"去完成"后，页面顶部可能出现广告倒计时：
 # "xx秒后点击广告得丰富奖励" → 等待变成 "点击立得丰富奖励" → 点击。
 # 如果未检测到该广告文案，则执行正常的 browse 浏览动作。
@@ -92,22 +113,49 @@ handle_ad_reward: &handle_ad_reward
             threshold: 0.5
           wait_after: 2
 
+# 可复用：滚动查找并点击"去领取"
+# stop_scroll_if_found: 当前屏没有"去领取"但有"去完成"时，说明"去领取"已全部领完，
+# 立即停止滑动，让后续步骤处理"去完成"任务，避免无效翻页。
+scroll_find_go_claim: &scroll_find_go_claim
+  name: 滚动查找并点击去领取
+  action: scroll_find
+  break_loop_if_not_found: true
+  find:
+    type: ocr
+    text: "去领取"
+    roi: [25, 680, 670, 870]   # 每日任务滚动列表区
+    threshold: 0.5
+    exact_match: true
+  stop_scroll_if_found:
+    type: ocr
+    text: "去完成"
+    roi: [25, 680, 670, 870]
+    threshold: 0.5
+  max_swipes: 10
+  swipe_coords: [360, 1450, 360, 680, 300]  # 在滚动区内向上翻一页
+  swipe_wait: 1.0
+  wait_after: 2
+
+# 可复用：滚动查找并点击"去完成"
+# 使用时需覆盖 anchor_text 为具体任务名称
+scroll_find_go_finish: &scroll_find_go_finish
+  name: 滚动查找并点击去完成
+  action: scroll_find
+  break_loop_if_not_found: true
+  anchor_text: "浏览优惠活动"  # 默认值，使用时覆盖
+  target_text: "去完"       # "去完成" 的成字可能会被手型光标遮挡，用子串匹配兼容两种情况
+  anchor_roi: [25, 680, 670, 870]   # 在滚动列表区内查找任务名称
+  y_range: 80
+  x_range: [300, 720]
+  threshold: 0.5
+  exact_match: false
+  max_swipes: 10
+  swipe_coords: [360, 1450, 360, 680, 300]
+  swipe_wait: 1.0
+  wait_after: 2
+
 steps:
-  # ===== 进入游戏（如果当前在登录界面） =====
-  - name: 进入游戏
-    action: tap
-    find:
-      type: ocr
-      text: "进入游戏"
-      roi: [0, 1100, 720, 460]
-      threshold: 0.5
-    skip_if_not_found: true
-    wait_after: 5
-
-  # ===== 第一阶段：进入弹窗并领取所有"去领取"奖励 =====
-  # ===== 第一阶段：进入弹窗并领取所有"去领取"奖励 =====
-
-  # 1. 主界面点击底部"任务"按钮
+  # ===== 打开每日任务弹窗 =====
   - name: 点击任务按钮
     action: tap
     find:
@@ -115,10 +163,14 @@ steps:
       text: "任务"
       roi: [500, 1400, 180, 120]  # 底部右侧"任务"按钮区域
       threshold: 0.4
+    offset_y: -40                  # 向上偏移40像素，点击文字上方的图标
     wait_after: 2                 # 等待"每日任务"弹窗
 
-  # 2. 循环领取所有"去领取"奖励
-  #    每次迭代：ensure_page确认在弹窗 → 点击去领取（点击后无弹窗，无需等待/处理弹窗）
+  # 关闭可能覆盖在每日任务弹窗上方的"惊喜礼包"弹窗
+  - <<: *close_surprise_gift
+
+  # ===== 第一阶段：领取所有"去领取"奖励 =====
+  # 每次迭代：确保在弹窗 → 关闭惊喜礼包 → 滚动查找"去领取" → 检测放置区满
   - name: 领取去领取奖励
     loop: 50
     loop_steps:
@@ -126,8 +178,6 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
-        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
-        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
         recovery: return_to_game_main
         entry_find:
           type: ocr
@@ -135,29 +185,22 @@ steps:
           roi: [500, 1400, 180, 120]
           threshold: 0.4
         entry_wait: 2
-      - name: 点击去领取
-        action: tap
-        break_loop_if_not_found: true
-        find:
-          type: ocr
-          text: "去领取"
-          threshold: 0.5
-          exact_match: true
-          roi: [520, 600, 180, 800]    # 覆盖弹窗中"去领取"按钮区域
-        wait_after: 2                   # 留出时间让"放置区已满"提示出现，供下方 check_and_merge 检测
-      - <<: *check_and_merge            # 若点击去领取因放置区满而失败（"放置区角色已达上限"），
-                                        # 关闭弹窗→一键合成→重开弹窗，腾出空间后下次迭代即可领取成功
+      - <<: *close_surprise_gift
+      - <<: *scroll_find_go_claim
+      - <<: *check_and_merge
 
-  # 3. 关闭可能残留的弹窗
+  # 关闭可能残留的弹窗
   - page: congrats_popup
     fallback: {action: skip}
     wait_after: 2
 
   # ===== 第二阶段：逐个完成浏览任务 =====
   # 每个浏览任务的循环结构：
-  #   ensure_page → 查找anchor+去完成 → 浏览滑动(必须上下滑动才计时) → 返回 → 处理弹窗
+  #   ensure_page → 关闭惊喜礼包 → 滚动查找anchor+去完成 → 检测放置区满 →
+  #   验证是否离开弹窗（若仍在弹窗则跳过浏览，避免无效滑动） →
+  #   处理广告奖励 / browse 浏览 → 返回 → 处理弹窗
 
-  # 4. 浏览优惠活动（多次任务，浏览 10 秒）
+  # 4. 浏览优惠活动（多次任务，浏览 12 秒）
   - name: 浏览优惠活动
     loop: 20
     loop_steps:
@@ -165,8 +208,6 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
-        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
-        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
         recovery: return_to_game_main
         entry_find:
           type: ocr
@@ -174,37 +215,40 @@ steps:
           roi: [500, 1400, 180, 120]
           threshold: 0.4
         entry_wait: 2
-      - name: 点击去完成
-        action: tap
-        break_loop_if_not_found: true
-        find:
-          type: ocr_relative
-          anchor_text: "浏览优惠活动"
-          target_text: "去完成"
-          anchor_roi: [0, 400, 720, 1000]
-          y_range: 60
-          x_range: [300, 720]
-          threshold: 0.5
-          exact_match: true
-        wait_after: 2
+      - <<: *close_surprise_gift
+      - <<: *scroll_find_go_finish
+        name: 滚动查找浏览优惠活动去完成
+        anchor_text: "浏览优惠活动"
       - <<: *check_and_merge
-      - <<: *handle_ad_reward
+      - name: 验证是否已离开每日任务弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "每日任务"
+          roi: [250, 450, 220, 120]   # 弹窗标题区域
+          threshold: 0.4
+        then_steps:
+          - name: 仍在弹窗中，跳过浏览
+            action: wait
+            duration: 1
         else_steps:
-          - name: 等待浏览
-            action: browse
-            duration: 12
-      - name: 返回每日任务弹窗
-        action: return_to_task
-        wait_after: 2
-      - <<: *close_mgc_overlay
-      - name: 处理去看看弹窗
-        page: browse_congrats_popup
-        fallback: {action: skip}
-      - name: 关闭开心收下弹窗
-        page: congrats_popup
-        fallback: {action: skip}
+          - <<: *handle_ad_reward
+            else_steps:
+              - name: 等待浏览
+                action: browse
+                duration: 12
+          - name: 返回每日任务弹窗
+            action: return_to_task
+            wait_after: 2
+          - <<: *close_mgc_overlay
+          - name: 处理去看看弹窗
+            page: browse_congrats_popup
+            fallback: {action: skip}
+          - name: 关闭开心收下弹窗
+            page: congrats_popup
+            fallback: {action: skip}
 
-  # 5. 下单领奖励（单次，浏览 10 秒）
+  # 5. 下单领奖励（单次，浏览 12 秒）
   - name: 下单领奖励
     loop: 1
     loop_steps:
@@ -212,8 +256,6 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
-        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
-        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
         recovery: return_to_game_main
         entry_find:
           type: ocr
@@ -221,37 +263,40 @@ steps:
           roi: [500, 1400, 180, 120]
           threshold: 0.4
         entry_wait: 2
-      - name: 点击去完成
-        action: tap
-        break_loop_if_not_found: true
-        find:
-          type: ocr_relative
-          anchor_text: "下单领奖励"
-          target_text: "去完成"
-          anchor_roi: [0, 400, 720, 1000]
-          y_range: 60
-          x_range: [300, 720]
-          threshold: 0.5
-          exact_match: true
-        wait_after: 2
+      - <<: *close_surprise_gift
+      - <<: *scroll_find_go_finish
+        name: 滚动查找下单领奖励去完成
+        anchor_text: "下单领奖励"
       - <<: *check_and_merge
-      - <<: *handle_ad_reward
+      - name: 验证是否已离开每日任务弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "每日任务"
+          roi: [250, 450, 220, 120]
+          threshold: 0.4
+        then_steps:
+          - name: 仍在弹窗中，跳过浏览
+            action: wait
+            duration: 1
         else_steps:
-          - name: 等待浏览
-            action: browse
-            duration: 12
-      - name: 返回每日任务弹窗
-        action: return_to_task
-        wait_after: 2
-      - <<: *close_mgc_overlay
-      - name: 处理去看看弹窗
-        page: browse_congrats_popup
-        fallback: {action: skip}
-      - name: 关闭开心收下弹窗
-        page: congrats_popup
-        fallback: {action: skip}
+          - <<: *handle_ad_reward
+            else_steps:
+              - name: 等待浏览
+                action: browse
+                duration: 12
+          - name: 返回每日任务弹窗
+            action: return_to_task
+            wait_after: 2
+          - <<: *close_mgc_overlay
+          - name: 处理去看看弹窗
+            page: browse_congrats_popup
+            fallback: {action: skip}
+          - name: 关闭开心收下弹窗
+            page: congrats_popup
+            fallback: {action: skip}
 
-  # 6. 浏览页面领奖励（多次任务，浏览 10 秒）
+  # 6. 浏览页面领奖励（多次任务，浏览 12 秒）
   - name: 浏览页面领奖励
     loop: 20
     loop_steps:
@@ -259,8 +304,6 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
-        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
-        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
         recovery: return_to_game_main
         entry_find:
           type: ocr
@@ -268,37 +311,40 @@ steps:
           roi: [500, 1400, 180, 120]
           threshold: 0.4
         entry_wait: 2
-      - name: 点击去完成
-        action: tap
-        break_loop_if_not_found: true
-        find:
-          type: ocr_relative
-          anchor_text: "浏览页面领奖励"
-          target_text: "去完成"
-          anchor_roi: [0, 400, 720, 1000]
-          y_range: 60
-          x_range: [300, 720]
-          threshold: 0.5
-          exact_match: true
-        wait_after: 2
+      - <<: *close_surprise_gift
+      - <<: *scroll_find_go_finish
+        name: 滚动查找浏览页面领奖励去完成
+        anchor_text: "浏览页面领奖励"
       - <<: *check_and_merge
-      - <<: *handle_ad_reward
+      - name: 验证是否已离开每日任务弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "每日任务"
+          roi: [250, 450, 220, 120]
+          threshold: 0.4
+        then_steps:
+          - name: 仍在弹窗中，跳过浏览
+            action: wait
+            duration: 1
         else_steps:
-          - name: 等待浏览
-            action: browse
-            duration: 12
-      - name: 返回每日任务弹窗
-        action: return_to_task
-        wait_after: 2
-      - <<: *close_mgc_overlay
-      - name: 处理去看看弹窗
-        page: browse_congrats_popup
-        fallback: {action: skip}
-      - name: 关闭开心收下弹窗
-        page: congrats_popup
-        fallback: {action: skip}
+          - <<: *handle_ad_reward
+            else_steps:
+              - name: 等待浏览
+                action: browse
+                duration: 12
+          - name: 返回每日任务弹窗
+            action: return_to_task
+            wait_after: 2
+          - <<: *close_mgc_overlay
+          - name: 处理去看看弹窗
+            page: browse_congrats_popup
+            fallback: {action: skip}
+          - name: 关闭开心收下弹窗
+            page: congrats_popup
+            fallback: {action: skip}
 
-  # 7. 点外卖好饭领红包（单次，浏览 10 秒）
+  # 7. 点外卖好饭领红包（单次，浏览 12 秒）
   - name: 点外卖好饭领红包
     loop: 1
     loop_steps:
@@ -306,8 +352,6 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
-        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
-        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
         recovery: return_to_game_main
         entry_find:
           type: ocr
@@ -315,37 +359,40 @@ steps:
           roi: [500, 1400, 180, 120]
           threshold: 0.4
         entry_wait: 2
-      - name: 点击去完成
-        action: tap
-        break_loop_if_not_found: true
-        find:
-          type: ocr_relative
-          anchor_text: "点外卖好饭领红包"
-          target_text: "去完成"
-          anchor_roi: [0, 400, 720, 1000]
-          y_range: 60
-          x_range: [300, 720]
-          threshold: 0.5
-          exact_match: true
-        wait_after: 2
+      - <<: *close_surprise_gift
+      - <<: *scroll_find_go_finish
+        name: 滚动查找点外卖好饭领红包去完成
+        anchor_text: "点外卖好饭领红包"
       - <<: *check_and_merge
-      - <<: *handle_ad_reward
+      - name: 验证是否已离开每日任务弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "每日任务"
+          roi: [250, 450, 220, 120]
+          threshold: 0.4
+        then_steps:
+          - name: 仍在弹窗中，跳过浏览
+            action: wait
+            duration: 1
         else_steps:
-          - name: 等待浏览
-            action: browse
-            duration: 12
-      - name: 返回每日任务弹窗
-        action: return_to_task
-        wait_after: 2
-      - <<: *close_mgc_overlay
-      - name: 处理去看看弹窗
-        page: browse_congrats_popup
-        fallback: {action: skip}
-      - name: 关闭开心收下弹窗
-        page: congrats_popup
-        fallback: {action: skip}
+          - <<: *handle_ad_reward
+            else_steps:
+              - name: 等待浏览
+                action: browse
+                duration: 12
+          - name: 返回每日任务弹窗
+            action: return_to_task
+            wait_after: 2
+          - <<: *close_mgc_overlay
+          - name: 处理去看看弹窗
+            page: browse_congrats_popup
+            fallback: {action: skip}
+          - name: 关闭开心收下弹窗
+            page: congrats_popup
+            fallback: {action: skip}
 
-  # 8. 外卖浏览下单（单次，浏览 10 秒）
+  # 8. 外卖浏览下单（单次，浏览 12 秒）
   - name: 外卖浏览下单
     loop: 1
     loop_steps:
@@ -353,8 +400,6 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
-        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
-        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
         recovery: return_to_game_main
         entry_find:
           type: ocr
@@ -362,35 +407,38 @@ steps:
           roi: [500, 1400, 180, 120]
           threshold: 0.4
         entry_wait: 2
-      - name: 点击去完成
-        action: tap
-        break_loop_if_not_found: true
-        find:
-          type: ocr_relative
-          anchor_text: "外卖浏览下单"
-          target_text: "去完成"
-          anchor_roi: [0, 400, 720, 1000]
-          y_range: 60
-          x_range: [300, 720]
-          threshold: 0.5
-          exact_match: true
-        wait_after: 2
+      - <<: *close_surprise_gift
+      - <<: *scroll_find_go_finish
+        name: 滚动查找外卖浏览下单去完成
+        anchor_text: "外卖浏览下单"
       - <<: *check_and_merge
-      - <<: *handle_ad_reward
+      - name: 验证是否已离开每日任务弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "每日任务"
+          roi: [250, 450, 220, 120]
+          threshold: 0.4
+        then_steps:
+          - name: 仍在弹窗中，跳过浏览
+            action: wait
+            duration: 1
         else_steps:
-          - name: 等待浏览
-            action: browse
-            duration: 12
-      - name: 返回每日任务弹窗
-        action: return_to_task
-        wait_after: 2
-      - <<: *close_mgc_overlay
-      - name: 处理去看看弹窗
-        page: browse_congrats_popup
-        fallback: {action: skip}
-      - name: 关闭开心收下弹窗
-        page: congrats_popup
-        fallback: {action: skip}
+          - <<: *handle_ad_reward
+            else_steps:
+              - name: 等待浏览
+                action: browse
+                duration: 12
+          - name: 返回每日任务弹窗
+            action: return_to_task
+            wait_after: 2
+          - <<: *close_mgc_overlay
+          - name: 处理去看看弹窗
+            page: browse_congrats_popup
+            fallback: {action: skip}
+          - name: 关闭开心收下弹窗
+            page: congrats_popup
+            fallback: {action: skip}
 
   # 9. 浏览30秒领精灵球（单次，浏览 30 秒）
   - name: 浏览30秒领精灵球
@@ -400,8 +448,6 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
-        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
-        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
         recovery: return_to_game_main
         entry_find:
           type: ocr
@@ -409,37 +455,40 @@ steps:
           roi: [500, 1400, 180, 120]
           threshold: 0.4
         entry_wait: 2
-      - name: 点击去完成
-        action: tap
-        break_loop_if_not_found: true
-        find:
-          type: ocr_relative
-          anchor_text: "浏览30秒领精灵球"
-          target_text: "去完成"
-          anchor_roi: [0, 400, 720, 1000]
-          y_range: 60
-          x_range: [300, 720]
-          threshold: 0.5
-          exact_match: true
-        wait_after: 2
+      - <<: *close_surprise_gift
+      - <<: *scroll_find_go_finish
+        name: 滚动查找浏览30秒领精灵球去完成
+        anchor_text: "浏览30秒领精灵球"
       - <<: *check_and_merge
-      - <<: *handle_ad_reward
+      - name: 验证是否已离开每日任务弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "每日任务"
+          roi: [250, 450, 220, 120]
+          threshold: 0.4
+        then_steps:
+          - name: 仍在弹窗中，跳过浏览
+            action: wait
+            duration: 1
         else_steps:
-          - name: 等待浏览
-            action: browse
-            duration: 30
-      - name: 返回每日任务弹窗
-        action: return_to_task
-        wait_after: 2
-      - <<: *close_mgc_overlay
-      - name: 处理去看看弹窗
-        page: browse_congrats_popup
-        fallback: {action: skip}
-      - name: 关闭开心收下弹窗
-        page: congrats_popup
-        fallback: {action: skip}
+          - <<: *handle_ad_reward
+            else_steps:
+              - name: 等待浏览
+                action: browse
+                duration: 30
+          - name: 返回每日任务弹窗
+            action: return_to_task
+            wait_after: 2
+          - <<: *close_mgc_overlay
+          - name: 处理去看看弹窗
+            page: browse_congrats_popup
+            fallback: {action: skip}
+          - name: 关闭开心收下弹窗
+            page: congrats_popup
+            fallback: {action: skip}
 
-  # 10. 完成浏览领奖励（多次任务，浏览 10 秒）
+  # 10. 完成浏览领奖励（多次任务，浏览 12 秒）
   - name: 完成浏览领奖励
     loop: 20
     loop_steps:
@@ -447,8 +496,6 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
-        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
-        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
         recovery: return_to_game_main
         entry_find:
           type: ocr
@@ -456,37 +503,40 @@ steps:
           roi: [500, 1400, 180, 120]
           threshold: 0.4
         entry_wait: 2
-      - name: 点击去完成
-        action: tap
-        break_loop_if_not_found: true
-        find:
-          type: ocr_relative
-          anchor_text: "完成浏览领奖励"
-          target_text: "去完成"
-          anchor_roi: [0, 400, 720, 1000]
-          y_range: 60
-          x_range: [300, 720]
-          threshold: 0.5
-          exact_match: true
-        wait_after: 2
+      - <<: *close_surprise_gift
+      - <<: *scroll_find_go_finish
+        name: 滚动查找完成浏览领奖励去完成
+        anchor_text: "完成浏览领奖励"
       - <<: *check_and_merge
-      - <<: *handle_ad_reward
+      - name: 验证是否已离开每日任务弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "每日任务"
+          roi: [250, 450, 220, 120]
+          threshold: 0.4
+        then_steps:
+          - name: 仍在弹窗中，跳过浏览
+            action: wait
+            duration: 1
         else_steps:
-          - name: 等待浏览
-            action: browse
-            duration: 12
-      - name: 返回每日任务弹窗
-        action: return_to_task
-        wait_after: 2
-      - <<: *close_mgc_overlay
-      - name: 处理去看看弹窗
-        page: browse_congrats_popup
-        fallback: {action: skip}
-      - name: 关闭开心收下弹窗
-        page: congrats_popup
-        fallback: {action: skip}
+          - <<: *handle_ad_reward
+            else_steps:
+              - name: 等待浏览
+                action: browse
+                duration: 12
+          - name: 返回每日任务弹窗
+            action: return_to_task
+            wait_after: 2
+          - <<: *close_mgc_overlay
+          - name: 处理去看看弹窗
+            page: browse_congrats_popup
+            fallback: {action: skip}
+          - name: 关闭开心收下弹窗
+            page: congrats_popup
+            fallback: {action: skip}
 
-  # 11. 浏览好物5秒领奖励（多次任务，浏览 5 秒）
+  # 11. 浏览好物5秒领奖励（多次任务，浏览 7 秒：点击+滑动共约7秒）
   - name: 浏览好物5秒领奖励
     loop: 20
     loop_steps:
@@ -494,8 +544,6 @@ steps:
         action: ensure_page
         target_page: daily_task_popup
         max_back_attempts: 2
-        # 改进点2/3：若反复按返回仍到不了弹窗（如误回 MainActivity / 卡在第三方App），
-        # 先执行 return_to_game_main 统一恢复回 MGCGameActivity，再重试一次导航。
         recovery: return_to_game_main
         entry_find:
           type: ocr
@@ -503,35 +551,38 @@ steps:
           roi: [500, 1400, 180, 120]
           threshold: 0.4
         entry_wait: 2
-      - name: 点击去完成
-        action: tap
-        break_loop_if_not_found: true
-        find:
-          type: ocr_relative
-          anchor_text: "浏览好物5秒领奖励"
-          target_text: "去完成"
-          anchor_roi: [0, 400, 720, 1000]
-          y_range: 60
-          x_range: [300, 720]
-          threshold: 0.5
-          exact_match: true
-        wait_after: 2
+      - <<: *close_surprise_gift
+      - <<: *scroll_find_go_finish
+        name: 滚动查找浏览好物5秒领奖励去完成
+        anchor_text: "浏览好物5秒领奖励"
       - <<: *check_and_merge
-      - <<: *handle_ad_reward
+      - name: 验证是否已离开每日任务弹窗
+        action: if_found
+        find:
+          type: ocr
+          text: "每日任务"
+          roi: [250, 450, 220, 120]
+          threshold: 0.4
+        then_steps:
+          - name: 仍在弹窗中，跳过浏览
+            action: wait
+            duration: 1
         else_steps:
-          - name: 等待浏览
-            action: browse
-            duration: 7
-      - name: 返回每日任务弹窗
-        action: return_to_task
-        wait_after: 2
-      - <<: *close_mgc_overlay
-      - name: 处理去看看弹窗
-        page: browse_congrats_popup
-        fallback: {action: skip}
-      - name: 关闭开心收下弹窗
-        page: congrats_popup
-        fallback: {action: skip}
+          - <<: *handle_ad_reward
+            else_steps:
+              - name: 等待浏览
+                action: browse
+                duration: 7
+          - name: 返回每日任务弹窗
+            action: return_to_task
+            wait_after: 2
+          - <<: *close_mgc_overlay
+          - name: 处理去看看弹窗
+            page: browse_congrats_popup
+            fallback: {action: skip}
+          - name: 关闭开心收下弹窗
+            page: congrats_popup
+            fallback: {action: skip}
 
   # 12. 最后关闭可能残留的弹窗，返回主界面
   - page: congrats_popup
