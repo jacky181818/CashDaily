@@ -8,11 +8,38 @@ from pathlib import Path
 
 
 class ADB:
+    """Android 调试桥（ADB）操作封装。
+
+    提供截图、点击、滑动、应用启停、屏幕信息获取等常用 ADB 操作，
+    所有命令通过 subprocess 调用本地 adb 可执行文件完成。
+
+    Attributes:
+        adb_path: adb 可执行文件的路径。
+        device: 目标设备序列号；为 None 时使用默认连接设备。
+    """
+
     def __init__(self, adb_path: str, device: str = None):
+        """初始化 ADB 实例。
+
+        Args:
+            adb_path: adb 可执行文件的完整路径（如 ``/usr/bin/adb``）。
+            device: 目标设备序列号（对应 ``adb -s <device>``）。
+                    为 None 时不指定设备，使用默认连接的设备。
+        """
         self.adb_path = adb_path
         self.device = device
 
     def _cmd(self, args: list[str]) -> list[str]:
+        """构建完整的 adb 命令列表。
+
+        在命令参数前自动添加 adb 路径和设备选项（如已指定）。
+
+        Args:
+            args: adb 子命令及其参数列表，如 ``["shell", "input", "tap", "100", "200"]``。
+
+        Returns:
+            拼接好的完整命令列表，可直接传给 subprocess。
+        """
         cmd = [self.adb_path]
         if self.device:
             cmd += ["-s", self.device]
@@ -20,6 +47,21 @@ class ADB:
         return cmd
 
     def run(self, args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
+        """执行 adb 命令并返回结果。
+
+        使用 ``text=True`` 和 ``errors="replace"`` 容错解码，避免 dumpsys 等输出中的
+        非法多字节序列在中文 Windows（GBK）下触发 UnicodeDecodeError。
+
+        Args:
+            args: adb 子命令及其参数列表，如 ``["shell", "input", "tap", "100", "200"]``。
+            timeout: 命令超时时间（秒），默认 30 秒。
+
+        Returns:
+            subprocess.CompletedProcess 实例，包含 stdout、stderr、returncode 等。
+
+        Raises:
+            subprocess.TimeoutExpired: 命令执行超时。
+        """
         cmd = self._cmd(args)
         # 用 text=True + errors="replace" 容错解码，避免 dumpsys 等输出中的非法
         # 多字节序列在中文 Windows(GBK)下触发 UnicodeDecodeError 导致 stdout 为 None
@@ -27,10 +69,22 @@ class ADB:
                               errors="replace", timeout=timeout)
 
     def get_state(self) -> str:
+        """获取设备连接状态。
+
+        Returns:
+            设备状态字符串，如 ``"device"``、``"offline"``、``"unauthorized"`` 等。
+        """
         r = self.run(["get-state"])
         return r.stdout.strip()
 
     def is_connected(self) -> bool:
+        """检查是否有设备处于已连接状态。
+
+        通过解析 ``adb devices`` 输出判断是否存在非 offline 的设备。
+
+        Returns:
+            如果至少有一个在线设备则返回 True，否则返回 False。
+        """
         r = self.run(["devices"])
         lines = r.stdout.strip().splitlines()
         # 第二行开始是设备列表
@@ -40,7 +94,20 @@ class ADB:
         return False
 
     def screenshot(self, save_path: str = None) -> str:
-        """截图并保存到本地，返回文件路径"""
+        """截图并保存到本地，返回文件路径。
+
+        在设备上执行 screencap，将截图 pull 到本地路径。
+        若截图为空或不存在，最多重试 3 次。
+
+        Args:
+            save_path: 本地保存路径。为 None 时自动生成临时文件路径。
+
+        Returns:
+            截图保存的本地文件路径。
+
+        Raises:
+            RuntimeError: 重试后截图仍为空或保存失败。
+        """
         if save_path is None:
             save_path = os.path.join(tempfile.gettempdir(), f"_adb_screenshot_{int(time.time())}.png")
 

@@ -278,6 +278,28 @@ identify:
 
 ---
 
+## 调试手段
+
+### 获取当前活动的 Activity
+
+```bash
+adb shell dumpsys window | findstr "mCurrentFocus"
+```
+
+### OCR 识别图片内容
+
+```bash
+python -c "from rapidocr_onnxruntime import RapidOCR; ocr = RapidOCR(); result, _ = ocr(r'截图路径.png'); [print(f'{item[1]:20s} conf={item[2]:.3f} box={item[0]}') for item in (result or [])]"
+```
+
+示例（替换为实际截图路径）：
+
+```bash
+python -c "from rapidocr_onnxruntime import RapidOCR; ocr = RapidOCR(); result, _ = ocr(r'D:\MyFavorite\workspace\junan\src\CashDaily\game_auto\logs\一键合成_20260723_154334\010_if_found_检测并关闭评审得奖弹窗.png'); [print(f'{item[1]:20s} conf={item[2]:.3f} box={item[0]}') for item in (result or [])]"
+```
+
+---
+
 ## 重新生成调试素材
 
 运行期产生的调试截图、日志、`__pycache__` 等均不提交。如需清理本地产物：

@@ -7,8 +7,30 @@ from PIL import Image
 
 
 class FinderResult:
-    """查找结果"""
+    """屏幕元素查找结果。
+
+    封装一次查找操作的结果信息，包括目标位置坐标、置信度、使用的查找方法等。
+    通过 ``found`` 属性判断是否成功找到目标。
+
+    Attributes:
+        x: 目标中心点的 x 坐标（屏幕绝对坐标）。未找到时为 0。
+        y: 目标中心点的 y 坐标（屏幕绝对坐标）。未找到时为 0。
+        confidence: 匹配置信度（0.0 ~ 1.0）。未找到时为 0。
+        method: 使用的查找方法名称（如 ``"template"``、``"ocr"``、``"color"`` 等）。
+        detail: 查找过程的详细描述信息，用于日志和调试。
+        found: 只读属性，置信度大于 0 时为 True，表示成功找到目标。
+    """
+
     def __init__(self, x: int, y: int, confidence: float, method: str, detail: str = ""):
+        """初始化查找结果。
+
+        Args:
+            x: 目标中心点的 x 坐标。
+            y: 目标中心点的 y 坐标。
+            confidence: 匹配置信度，大于 0 表示找到目标。
+            method: 查找方法名称。
+            detail: 详细描述信息。
+        """
         self.x = x
         self.y = y
         self.confidence = confidence
@@ -24,7 +46,24 @@ class FinderResult:
 
 
 class Finder:
+    """屏幕元素定位器，提供三种查找策略：模板匹配、OCR 文字识别、颜色查找。
+
+    支持 ROI 区域限制、多尺度模板匹配、透明背景处理、相对 OCR 定位等高级功能。
+    OCR 功能基于 RapidOCR（ONNX Runtime），按需延迟初始化。
+
+    Attributes:
+        templates_dir: 模板图片文件所在目录。
+        threshold: 默认匹配置信度阈值。
+    """
+
     def __init__(self, templates_dir: str, threshold: float = 0.55, ocr_enabled: bool = False):
+        """初始化 Finder 实例。
+
+        Args:
+            templates_dir: 模板图片文件所在目录路径。
+            threshold: 默认匹配置信度阈值，低于此值视为未匹配。默认 0.55。
+            ocr_enabled: 是否启用 OCR 功能。为 True 时在首次调用 OCR 方法时初始化引擎。
+        """
         self.templates_dir = templates_dir
         self.threshold = threshold
         self._ocr = None
@@ -199,7 +238,8 @@ class Finder:
                           anchor_roi: tuple = None, y_range: int = 60,
                           x_range: tuple = (0, 720), threshold: float = 0.5,
                           anchor_threshold: float = None,
-                          exact_match: bool = False) -> FinderResult:
+                          exact_match: bool = False,
+                          anchor_same_line: str = None) -> FinderResult:
         """
         相对 OCR 查找：先找到 anchor 文字，再在 anchor 附近区域查找 target。
 
@@ -212,6 +252,9 @@ class Finder:
         threshold: target 的最低置信度
         anchor_threshold: anchor 的最低置信度（默认与 threshold 相同）
         exact_match: 对 target 是否使用精确匹配
+        anchor_same_line: 可选，要求 anchor 同一行（y 坐标接近）还必须存在此文本，
+                          否则不算匹配。用于区分 OCR 拆分为多段的同名任务，
+                          如 "下单领奖励" 同行有 "浏览得精灵球" 才是目标任务。
         """
         if self._ocr is None:
             self._init_ocr()
@@ -226,6 +269,23 @@ class Finder:
         if not anchor_result.found:
             return FinderResult(0, 0, 0, "ocr_relative",
                                 f"未找到 anchor '{anchor_text}'")
+
+        # 1.5 同行共存验证：anchor 同一行必须还存在指定文本
+        if anchor_same_line:
+            coexist_result = self.find_ocr(
+                screenshot_path, anchor_same_line,
+                roi=anchor_roi,
+                threshold=anchor_threshold or threshold,
+                exact_match=False
+            )
+            if not coexist_result.found:
+                return FinderResult(0, 0, 0, "ocr_relative",
+                                    f"找到 anchor '{anchor_text}'，但同行未找到 '{anchor_same_line}'")
+            # 验证 y 坐标接近（同一行，允许 ±15px 误差）
+            if abs(coexist_result.y - anchor_result.y) > 15:
+                return FinderResult(0, 0, 0, "ocr_relative",
+                                    f"找到 anchor '{anchor_text}' @y={anchor_result.y} 和 "
+                                    f"'{anchor_same_line}' @y={coexist_result.y}，但不在同一行")
 
         anchor_y = anchor_result.y
         anchor_x = anchor_result.x

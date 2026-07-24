@@ -6,7 +6,23 @@ from datetime import datetime
 
 
 class Logger:
+    """日志记录器，负责任务执行过程中的日志输出和截图归档。
+
+    每次任务执行会创建一个独立的会话目录，日志文件和截图均保存在该目录下，
+    便于事后回溯和调试。
+
+    Attributes:
+        logs_dir: 日志根目录路径。
+        log_file: 当前会话的日志文件路径；会话未开始时为 None。
+        step_count: 当前会话已记录的步骤计数。
+    """
+
     def __init__(self, logs_dir: str):
+        """初始化日志记录器。
+
+        Args:
+            logs_dir: 日志根目录路径，每次会话会在此目录下创建子目录。
+        """
         self.logs_dir = logs_dir
         self.log_file = None
         self.step_count = 0

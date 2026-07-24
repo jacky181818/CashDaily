@@ -131,9 +131,13 @@ scroll_find_go_claim: &scroll_find_go_claim
     text: "去完成"
     roi: [25, 680, 670, 870]
     threshold: 0.5
-  max_swipes: 10
-  swipe_coords: [360, 1450, 360, 680, 300]  # 在滚动区内向上翻一页
-  swipe_wait: 1.0
+  max_swipes: 6
+  swipe_coords: [360, 1130, 360, 800, 500]  # 小幅上滑（约330px），duration 加长减少惯性
+  swipe_wait: 5.0                            # 等待页面惯性滚动停止
+  reset_scroll:                              # 开始前滑回顶部
+    swipes: 5
+    swipe_coords: [360, 700, 360, 1400, 300]  # 大幅下滑快速回顶部
+    swipe_wait: 2.0
   wait_after: 2
 
 # 可复用：滚动查找并点击"去完成"
@@ -149,9 +153,13 @@ scroll_find_go_finish: &scroll_find_go_finish
   x_range: [300, 720]
   threshold: 0.5
   exact_match: false
-  max_swipes: 10
-  swipe_coords: [360, 1450, 360, 680, 300]
-  swipe_wait: 1.0
+  max_swipes: 6
+  swipe_coords: [360, 1130, 360, 800, 500]  # 小幅上滑（约330px），duration 加长减少惯性
+  swipe_wait: 5.0                            # 等待页面惯性滚动停止
+  reset_scroll:                              # 开始前滑回顶部
+    swipes: 5
+    swipe_coords: [360, 700, 360, 1400, 300]  # 大幅下滑快速回顶部
+    swipe_wait: 2.0
   wait_after: 2
 
 steps:
@@ -270,6 +278,7 @@ steps:
       - <<: *scroll_find_go_finish
         name: 滚动查找下单领奖励去完成
         anchor_text: "下单领奖励"
+        anchor_same_line: "浏览得精灵球"  # 同行必须有此文本，区分其他"下单领奖励"任务
       - <<: *check_and_merge
       - name: 验证是否已离开每日任务弹窗
         action: if_found

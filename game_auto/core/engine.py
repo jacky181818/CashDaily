@@ -6,8 +6,26 @@ from .finder import FinderResult
 
 
 class TaskConfig:
-    """任务配置"""
+    """任务配置信息，从 YAML 文件加载。
+
+    支持两种执行模式：
+    - 普通步骤模式：按 ``steps`` 列表顺序执行每个步骤。
+    - 子任务串联模式（workflow）：按 ``sub_tasks`` 列表依次加载并执行子任务文件。
+
+    Attributes:
+        name: 任务名称。
+        steps: 步骤列表，每个步骤为一个字典。
+        pre_commands: 执行前的 adb shell 命令列表。
+        precondition: 前置条件配置，满足才执行任务。
+        sub_tasks: 子任务文件名列表（workflow 模式）。
+    """
+
     def __init__(self, data: dict):
+        """初始化任务配置。
+
+        Args:
+            data: 从 YAML 文件加载的任务配置字典，必须包含 ``name`` 键。
+        """
         self.name = data["name"]
         self.steps = data.get("steps", [])
         self.pre_commands = data.get("pre_commands", [])  # 执行前的 adb shell 命令
@@ -16,9 +34,38 @@ class TaskConfig:
 
 
 class Engine:
-    """任务引擎"""
+    """任务执行引擎，调度"截图 → 页面识别 → 动作执行"的自动化循环。
+
+    Engine 是整个自动化框架的核心调度器，负责：
+    - 加载和执行任务配置（普通步骤 / 子任务串联 / 循环步骤）
+    - 页面等待与识别，根据当前页面执行对应动作
+    - 多种动作类型支持（tap、swipe、back、browse、scroll_find、ensure_page 等）
+    - 异常恢复（返回游戏主界面、关闭浮层、force-stop 第三方应用等）
+    - 条件分支（if_found）和循环等待（wait_until_found）
+
+    Attributes:
+        adb: ADB 实例，用于设备操作。
+        finder: Finder 实例，用于屏幕元素定位。
+        page_manager: PageManager 实例，用于页面识别。
+        logger: Logger 实例，用于日志记录。
+        config: 全局配置字典。
+        default_retry: 默认重试次数。
+        default_timeout: 默认超时时间（秒）。
+        default_wait: 默认动作后等待时间（秒）。
+        screenshot_cache: 最近一次截图的文件路径缓存。
+    """
 
     def __init__(self, adb, finder, page_manager, logger, config: dict):
+        """初始化任务引擎。
+
+        Args:
+            adb: ADB 实例，提供设备操作能力。
+            finder: Finder 实例，提供屏幕元素定位能力。
+            page_manager: PageManager 实例，提供页面识别能力。
+            logger: Logger 实例，提供日志记录能力。
+            config: 全局配置字典，可包含 ``default_retry``、``default_timeout``、
+                    ``default_wait_after``、``meituan_package``、``meituan_game_activity`` 等键。
+        """
         self.adb = adb
         self.finder = finder
         self.page_manager = page_manager
@@ -731,6 +778,10 @@ class Engine:
                 "threshold": step.get("threshold", 0.5),
                 "exact_match": step.get("exact_match", True),
             }
+            # 可选：要求 anchor 同一行还必须存在指定文本（用于区分 OCR 拆分的同名任务）
+            anchor_same_line = step.get("anchor_same_line")
+            if anchor_same_line:
+                find_spec["anchor_same_line"] = anchor_same_line
 
         if not find_spec:
             self.logger.info(f"scroll_find: 缺少 find 规则或 anchor_text/target_text")
@@ -745,6 +796,17 @@ class Engine:
         offset_x = int(step.get("offset_x", 0))
         offset_y = int(step.get("offset_y", 0))
         swipe_wait = float(step.get("swipe_wait", 1.0))
+
+        # reset_scroll: 开始查找前先将列表滑回顶部，避免上一轮滑到底部后下一轮找不到上方内容
+        reset_scroll = step.get("reset_scroll")
+        if reset_scroll:
+            reset_swipes = int(reset_scroll.get("swipes", 5))
+            reset_coords = reset_scroll.get("swipe_coords", [360, 700, 360, 1400, 300])  # 默认向下滑（回顶部）
+            reset_wait = float(reset_scroll.get("swipe_wait", swipe_wait))
+            self.logger.info(f"scroll_find: 滑回顶部（{reset_swipes} 次）")
+            for _ in range(reset_swipes):
+                self.adb.swipe(*reset_coords)
+                time.sleep(reset_wait)
 
         for i in range(max_swipes + 1):
             screenshot_path = self._take_screenshot()
@@ -1003,6 +1065,7 @@ class Engine:
                 threshold=find_spec.get("threshold", self.finder.threshold),
                 anchor_threshold=find_spec.get("anchor_threshold"),
                 exact_match=find_spec.get("exact_match", False),
+                anchor_same_line=find_spec.get("anchor_same_line"),
             )
         elif type_ == "color":
             return self.finder.find_color(
