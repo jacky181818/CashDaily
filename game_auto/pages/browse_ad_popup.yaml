@@ -1,0 +1,24 @@
+name: browse_ad_popup
+description: >
+  点击"去完成"后可能弹出的广告浏览弹窗（如快手极速版推广）。
+  弹窗中有黄色按钮"点击并浏览5秒领奖励"，点击后进入浏览倒计时。
+  该弹窗出现在 MRNStandardActivity 中，与天天现金主游戏 Activity 不同。
+
+# 第一级容器约束：仅在 MRNStandardActivity 中匹配
+activity: MRNStandardActivity
+
+identify:
+  - type: ocr
+    text: "点击并浏览"
+    roi: [50, 900, 620, 200]    # 弹窗中部黄色按钮区域
+    threshold: 0.5
+
+actions:
+  - name: 点击浏览领奖励按钮
+    find:
+      type: ocr
+      text: "点击并浏览"
+      roi: [50, 900, 620, 200]
+      threshold: 0.5
+    action: tap
+    wait_after: 2

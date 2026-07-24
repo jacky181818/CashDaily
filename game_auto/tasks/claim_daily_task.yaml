@@ -234,6 +234,9 @@ steps:
         else_steps:
           - <<: *handle_ad_reward
             else_steps:
+              - name: 检测广告浏览弹窗
+                page: browse_ad_popup
+                fallback: {action: skip}
               - name: 等待浏览
                 action: browse
                 duration: 12
@@ -282,6 +285,9 @@ steps:
         else_steps:
           - <<: *handle_ad_reward
             else_steps:
+              - name: 检测广告浏览弹窗
+                page: browse_ad_popup
+                fallback: {action: skip}
               - name: 等待浏览
                 action: browse
                 duration: 12
@@ -330,6 +336,9 @@ steps:
         else_steps:
           - <<: *handle_ad_reward
             else_steps:
+              - name: 检测广告浏览弹窗
+                page: browse_ad_popup
+                fallback: {action: skip}
               - name: 等待浏览
                 action: browse
                 duration: 12
@@ -378,6 +387,9 @@ steps:
         else_steps:
           - <<: *handle_ad_reward
             else_steps:
+              - name: 检测广告浏览弹窗
+                page: browse_ad_popup
+                fallback: {action: skip}
               - name: 等待浏览
                 action: browse
                 duration: 12
@@ -426,6 +438,9 @@ steps:
         else_steps:
           - <<: *handle_ad_reward
             else_steps:
+              - name: 检测广告浏览弹窗
+                page: browse_ad_popup
+                fallback: {action: skip}
               - name: 等待浏览
                 action: browse
                 duration: 12
@@ -474,6 +489,9 @@ steps:
         else_steps:
           - <<: *handle_ad_reward
             else_steps:
+              - name: 检测广告浏览弹窗
+                page: browse_ad_popup
+                fallback: {action: skip}
               - name: 等待浏览
                 action: browse
                 duration: 30
@@ -522,6 +540,9 @@ steps:
         else_steps:
           - <<: *handle_ad_reward
             else_steps:
+              - name: 检测广告浏览弹窗
+                page: browse_ad_popup
+                fallback: {action: skip}
               - name: 等待浏览
                 action: browse
                 duration: 12
@@ -570,6 +591,9 @@ steps:
         else_steps:
           - <<: *handle_ad_reward
             else_steps:
+              - name: 检测广告浏览弹窗
+                page: browse_ad_popup
+                fallback: {action: skip}
               - name: 等待浏览
                 action: browse
                 duration: 7

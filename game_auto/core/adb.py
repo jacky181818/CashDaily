@@ -58,13 +58,21 @@ class ADB:
             except Exception:
                 pass
 
-        self.run(["shell", "screencap", "-p", device_tmp])
-        self.run(["pull", device_tmp, win_path])
-        self.run(["shell", "rm", "-f", device_tmp])
+        max_retries = 3
+        for attempt in range(max_retries):
+            self.run(["shell", "screencap", "-p", device_tmp])
+            self.run(["pull", device_tmp, win_path])
+            self.run(["shell", "rm", "-f", device_tmp])
 
-        if os.path.exists(save_path):
-            return save_path
-        raise RuntimeError(f"截图保存失败: {save_path}")
+            if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
+                return save_path
+
+            # 截图为空或不存在，等待后重试
+            if attempt < max_retries - 1:
+                print(f"[ADB] 截图为空，第 {attempt + 1} 次重试...")
+                time.sleep(1)
+
+        raise RuntimeError(f"截图保存失败（重试 {max_retries} 次后仍为空）: {save_path}")
 
     def tap(self, x: int, y: int):
         """点击指定坐标"""
